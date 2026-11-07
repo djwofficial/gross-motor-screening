@@ -1,0 +1,9 @@
+# GitHub Actions only: everything the tests need, without rtmlib or onnxruntime.
+# Modules that need rtmlib import it inside functions, so tests never load it.
+numpy==2.5.4
+pandas==3.1.1
+scikit-learn==1.9.1
+joblib==1.6.0
+opencv-python-headless==5.0.0.93
+pytest==9.2.0
+ruff==0.17.4

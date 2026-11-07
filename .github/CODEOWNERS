@@ -1,0 +1,40 @@
+# Who must review a change to each folder (needs branch protection on main to be enforced).
+# Daryn: fill in the teammates' GitHub usernames after inviting them, then remove the leading "# ".
+
+# Shared contract: every part depends on these. Change only through Daryn.
+/common/format.py      @djwofficial
+/common/body25.py      @djwofficial
+/common/geometry.py    @djwofficial
+/tests/contracts/      @djwofficial
+/app/main.py           @djwofficial
+/rescore.py            @djwofficial
+/requirements*.txt     @djwofficial
+/pyproject.toml        @djwofficial
+/.github/              @djwofficial
+/AGENTS.md             @djwofficial
+/CLAUDE.md             @djwofficial
+
+# Marty
+# /data/               @MARTY_USERNAME
+# /model/              @MARTY_USERNAME
+# /models/             @MARTY_USERNAME
+# /common/pick.py      @MARTY_USERNAME
+
+# Revallo
+# /features/           @REVALLO_USERNAME
+# /eval/               @REVALLO_USERNAME
+
+# Louise
+# /live/pose.py        @LOUISE_USERNAME
+# /live/convert.py     @LOUISE_USERNAME
+# /live/capture.py     @LOUISE_USERNAME
+# /live/bench_fps.py   @LOUISE_USERNAME
+
+# Freya
+# /app/ui.py           @FREYA_USERNAME
+# /app/session.py      @FREYA_USERNAME
+
+# Theresia
+# /viz/                @THERESIA_USERNAME
+# /live/segment.py     @THERESIA_USERNAME
+# /live/quality.py     @THERESIA_USERNAME

@@ -1,0 +1,23 @@
+# Data never goes into the repo (dataset is downloaded by each person; testing-day data
+# stays on the encrypted drive named in the consent form).
+data/raw/*
+!data/raw/.gitkeep
+runs/
+*.zip
+*.mp4
+*.avi
+*.mov
+research_notes/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/

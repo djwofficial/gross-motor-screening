@@ -1,0 +1,19 @@
+[project]
+name = "gross-motor-screening"
+version = "0.1.0"
+description = "Live webcam screening aid for preschool gross motor tasks (NTHU ML final project, Group 11 x KEE). Not a diagnosis."
+requires-python = ">=3.12,<3.13"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["data/raw", "runs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

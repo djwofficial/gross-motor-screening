@@ -1,0 +1,21 @@
+# Runtime packages. Python 3.12 (numpy 2.5 needs 3.12 or newer).
+# Install order (see README):
+#   1. pip install -r requirements.txt
+#   2. pip install --no-deps rtmlib==0.0.16
+# rtmlib is installed without its dependencies because it always pulls the CPU
+# "onnxruntime", which breaks "onnxruntime-gpu" on the NVIDIA laptops. Its other
+# dependencies (numpy, opencv-contrib-python, tqdm) are pinned below.
+numpy==2.5.4
+pandas==3.1.1
+scikit-learn==1.9.1
+joblib==1.6.0
+matplotlib==3.11.2
+opencv-contrib-python==5.0.0.93
+tqdm==4.70.1
+
+# Pose model runtime: CPU on Mac, CUDA 13 on the NVIDIA laptops.
+# [cuda,cudnn] installs the CUDA 13 and cuDNN 9 runtime through pip, so no
+# separate CUDA install is needed; the NVIDIA driver must support CUDA 13
+# (nvidia-smi shows "CUDA Version: 13.x" or higher).
+onnxruntime==1.31.1; sys_platform == "darwin"
+onnxruntime-gpu[cuda,cudnn]==1.31.1; sys_platform != "darwin"
