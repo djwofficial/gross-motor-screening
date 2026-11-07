@@ -3,6 +3,8 @@
 ## Konteks
 Rencana lama di Google Doc (tab *Coding plan to Dec 6*) targetnya: app jalan end-to-end tanggal 29 Nov, dry run 3 Des, dan semua siap 6 Des. Sekarang targetnya dimajukan: **produk harus siap 27 Nov**, jadi waktunya tinggal 20 hari (7–27 Nov). Fokusnya coding saja. Presentasi, laporan, video, dan persiapan hari testing nanti saja.
 
+**Hari testing: Minggu 29 Nov** di 新竹市東區親子館, dua hari setelah code freeze (diputuskan 8 Nov). Tab lama *Coding plan to Dec 6* dan tab *MILESTONES* sudah dihapus dari Doc.
+
 **Definisi "siap" 27 Nov:** di laptop NVIDIA untuk live, app bisa melakukan semua ini:
 - satu jendela GUI: cek kesiapan, deteksi mulai/selesai otomatis, tebak task dan kaki, operator konfirmasi atau koreksi, lalu skor dan alasannya masuk `log.csv`, untuk 3 task;
 - testing mode tanpa skor di layar;

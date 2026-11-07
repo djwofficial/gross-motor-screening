@@ -1,6 +1,6 @@
 # Coding plan to Nov 27 (product only)
 
-Updated 2026-11-08 (Daryn). The product deadline moves from Dec 6 to Nov 27. This plan covers coding only; slides, report, video and testing-day preparation come later. The Coding plan to Dec 6 tab stays for reference.
+Updated 2026-11-08 (Daryn). The product deadline moves from Dec 6 to Nov 27. This plan covers coding only; slides, report, video and testing-day preparation come later. Testing day: Sunday Nov 29 at 新竹市東區親子館, two days after the code freeze.
 
 Ready on Nov 27 means: one GUI window on the live NVIDIA laptop runs the readiness check, finds the start and end of each try, guesses the task and leg, lets the operator confirm or correct, and writes the score with its reasons to log.csv, for all 3 tasks. Testing mode shows no score. Video is saved only when V is on. rescore.py gives the same scores as live. A dry run of 3 people × 3 tasks × 3 tries passes (27 JSON files and 27 log rows).
 
