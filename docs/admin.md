@@ -1,8 +1,8 @@
 # Repo admin steps (Daryn)
 
-Status 2026-11-08: repo pushed (private). Three steps are still open; each needs Daryn's account.
+Status 2026-11-08: repo pushed (private), CI on and green. Steps 2 and 3 are still open; each needs Daryn's account.
 
-## 1. Turn on CI (GitHub Actions)
+## 1. Turn on CI (GitHub Actions): DONE 2026-11-08
 The CI file `.github/workflows/ci.yml` is ready but not pushed: the GitHub CLI token has no
 `workflow` scope. Run once in a terminal (opens the browser to approve):
 ```bash
