@@ -13,6 +13,21 @@ points, compute movement clues, and a random forest gives a score 0 Bad / 1 Good
 Training data: Korean multiview child motor development dataset, **group B only** (Kim et al.
 2023, GigaScience 12, giad039). Real children are used only to test, never to retrain.
 
+Background (research question, data, how we judge success, timeline): `docs/project.md`.
+
+## Start of every session: who am I working with?
+When the user says who they are ("I'm Freya", "aku Marty"):
+1. Read `docs/people/<name>.md` (daryn, marty, revallo, louise, freya, theresia). It holds their
+   part, their files, what they need from others, and their task table with due dates.
+2. Check today's date and `git log --oneline -15` / `git branch -a`. Their next task is the first
+   row in the table whose Status is empty. Say which task it is, its due date, and whether it is
+   late or early (starting early is fine).
+3. If `docs/task_cards/<name>_<date>_*.md` exists for it, follow that card. If not, draft one from
+   the row with `docs/task_card_template.md` and show it before writing code.
+4. Work on a branch `<name>/<short-task>`; stay inside their files. When the task's "Done when"
+   check passes, write `Done YYYY-MM-DD` in their Status column in the same PR.
+If the user doesn't say who they are, ask before changing any file.
+
 ## Hard rules
 1. **Units: seconds and torso lengths, never raw pixels.** Use `common.geometry.normalize`
    (origin = neck in the first frame, scale = torso length, **y points up**). Dataset points are
@@ -28,6 +43,7 @@ Training data: Korean multiview child motor development dataset, **group B only*
 7. **Stay in your folder.** Change only the files of the task you were given. `common/`,
    `tests/contracts/`, `app/main.py`, `requirements*.txt`, `.github/` change only through Daryn.
    Don't edit or weaken a contract test to make it pass; ask Daryn if a signature must change.
+   You may update the Status column of your own `docs/people/<name>.md`.
 8. **Python 3.12**, versions pinned in `requirements.txt`. Don't add a dependency without
    asking Daryn (it must install on Mac and on Windows + NVIDIA).
 

@@ -6,6 +6,7 @@ model gives a score 0 Bad / 1 Good / 2 Perfect a few seconds after each try.
 **It is not a diagnosis.**
 
 - Plan, tasks and checkpoints: team Google Doc, tab *Coding plan to Nov 27*.
+- Background: [docs/project.md](docs/project.md). Your own tasks: [docs/people/](docs/people/) (tell your AI "I'm <name>").
 - Rules for people and AI tools: [AGENTS.md](AGENTS.md). Read it before your first PR.
 
 ## 1. Install (Python 3.12)
