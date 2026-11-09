@@ -20,15 +20,15 @@ Not yours: `model/train_rf.py`, `model/predict.py`, `models/` (Daryn).
 **Who waits for you:** Louise and Daryn (loader, Nov 11), Revallo (`pick_child`, Nov 15),
 Freya and Daryn (`predict_task`).
 
-## Tasks (write `Done YYYY-MM-DD` in Status in the same PR)
-| Due | Task | Level | Done when | Status |
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+| Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
-| Nov 8 | Milestone 1 | Easy | First output line: files: 4661 \| children: 106 \| attempts: 1555 |  |
-| Nov 11 | data/load_b.py: B_skel.zip → shared format; drop clips under 30 frames; center on the neck, scale by torso length; don't cut at 300 frames | Medium | 3,359 files for tasks 1–3 (1,205 / 1,056 / 1,098) |  |
-| Nov 13 | model/baseline.py per task, GroupKFold by child | Easy | Numbers close to Card 1 (macro-F1 0.19 / 0.20 / 0.26, kappa 0.00) and the child-leak check prints PASS |  |
-| Nov 15 | common/pick.py: pick_child() for files with 2+ people (28% of B files): lock on the person at the start, then follow the nearest neck. Revallo reuses the same function for live | Hard | 5 multi-person files checked by eye with Freya's replay |  |
-| Nov 22 | model/task_classifier.py: guess the task (1/2/3) and the leg from the clue table, GroupKFold by child | Medium | Accuracy and confusion matrix reported; if accuracy is low, the app uses keys only |  |
-| Nov 22 | Confusion matrices per task and per fold from Daryn's random forest, handed to Louise; check that predict takes under 1 s | Easy | CSV and PNG files exist |  |
+| Nov 8 | Milestone 1 | Easy | First output line: files: 4661 \| children: 106 \| attempts: 1555 | #13 |
+| Nov 11 | data/load_b.py: B_skel.zip → shared format; drop clips under 30 frames; center on the neck, scale by torso length; don't cut at 300 frames | Medium | 3,359 files for tasks 1–3 (1,205 / 1,056 / 1,098) | #14 |
+| Nov 13 | model/baseline.py per task, GroupKFold by child | Easy | Numbers close to Card 1 (macro-F1 0.19 / 0.20 / 0.26, kappa 0.00) and the child-leak check prints PASS | #15 |
+| Nov 15 | common/pick.py: pick_child() for files with 2+ people (28% of B files): lock on the person at the start, then follow the nearest neck. Revallo reuses the same function for live | Hard | 5 multi-person files checked by eye with Freya's replay | #16 |
+| Nov 22 | model/task_classifier.py: guess the task (1/2/3) and the leg from the clue table, GroupKFold by child | Medium | Accuracy and confusion matrix reported; if accuracy is low, the app uses keys only | #17 |
+| Nov 22 | Confusion matrices per task and per fold from Daryn's random forest, handed to Louise; check that predict takes under 1 s | Easy | CSV and PNG files exist | #18 |
 
 **Watch out:** split by child, never by file or attempt. Group B only. Every number in a PR
 comes from a script you ran.

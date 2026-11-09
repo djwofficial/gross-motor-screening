@@ -15,6 +15,8 @@ and `pytest` on every push to main and every pull request.
 GitHub → repo → Settings → Collaborators → add Marty, Revallo, Louise, Freya, Theresia.
 Then replace the `*_USERNAME` placeholders in `.github/CODEOWNERS` and remove the leading `# `.
 
+Then give them the task board too: it is private and repo access does not include it. https://github.com/users/djwofficial/projects/3 → ⋯ → Settings → Manage access → add each teammate as Write. Assign each open issue to its owner (the `owner:<name>` label says who).
+
 ## 3. Lock main (needs GitHub Pro for a private repo)
 `Upgrade to GitHub Pro or make this repository public` (HTTP 403 on 2026-11-08). Students get
 Pro free through the GitHub Student Developer Pack (education.github.com/pack). After that:

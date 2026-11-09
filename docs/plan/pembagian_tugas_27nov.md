@@ -197,5 +197,5 @@ Revallo memegang jalur kritis. Bebannya diringankan dengan tiga cara: `pick_chil
 - **fps < 15 dengan video aktif:** kecilkan resolusi simpan video, atau pakai mode `lightweight`. Keduanya harus diukur dulu, bukan ditebak.
 
 ## Verifikasi
-- Setiap checkpoint dicek dengan kolom "Selesai kalau". Pemilik tugas menulis "Done + tanggal".
+- Setiap checkpoint dicek dengan kolom "Selesai kalau". Status ada di papan proyek (https://github.com/users/djwofficial/projects/3); PR dengan `Closes #<issue>` menutup tugasnya.
 - Final 27 Nov: install bersih di laptop live → dry run 27 percobaan → `rescore.py` cocok 27/27 → tag `v1.0`.

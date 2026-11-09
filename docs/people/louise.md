@@ -27,16 +27,16 @@ Units: seconds and torso lengths (`common.geometry.normalize`, y points up), nev
 **Who waits for you:** Daryn (clue table Nov 18 for the model: the tightest handoff in the plan),
 Marty (task classifier), Freya and Daryn (`explain` for the log).
 
-## Tasks (write `Done YYYY-MM-DD` in Status in the same PR)
-| Due | Task | Level | Done when | Status |
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+| Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
-| Nov 8 | Milestone 1 | Easy | Same first line |  |
-| Nov 14 | Task 1 timeline and clues in features/clues.py: moments (both feet, steady, wobble), longest time on one foot (s), sway (torso lengths), touch-downs, wobble time. Build the timeline first and compute the clues from it | Medium | 3 clips match the by-eye counts, including the second a foot comes down |  |
-| Nov 17 | Task 2 timeline and clues: moments (hop, pause, both feet), hop count, longest pause | Hard | 3 clips match the by-eye counts |  |
-| Nov 18 | Clue table for all 3,359 files, one row per file (task 3 columns from Revallo), sent to Daryn and Marty | Medium | No empty values, or every filled-in value is written down |  |
-| Nov 19 | features/clues.py: explain(task, clues, events) → short reason text for the log, for example 4.2 s on one foot, foot down at 2.0 s | Easy | Reason text for 3 example clips matches the by-eye sheet |  |
-| Nov 22 | Check the clues and timeline on our own team clips (Theresia's 27 recordings, through Revallo's --video mode); tune thresholds | Medium | Most clips match the by-eye counts; clips that differ are listed |  |
-| Nov 25 | eval/report.py: confusion matrix per task, per-fold numbers, mix-ups compared with the scoring rules | Medium | One report covering all 3 tasks |  |
+| Nov 8 | Milestone 1 | Easy | Same first line | #19 |
+| Nov 14 | Task 1 timeline and clues in features/clues.py: moments (both feet, steady, wobble), longest time on one foot (s), sway (torso lengths), touch-downs, wobble time. Build the timeline first and compute the clues from it | Medium | 3 clips match the by-eye counts, including the second a foot comes down | #20 |
+| Nov 17 | Task 2 timeline and clues: moments (hop, pause, both feet), hop count, longest pause | Hard | 3 clips match the by-eye counts | #21 |
+| Nov 18 | Clue table for all 3,359 files, one row per file (task 3 columns from Revallo), sent to Daryn and Marty | Medium | No empty values, or every filled-in value is written down | #22 |
+| Nov 19 | features/clues.py: explain(task, clues, events) → short reason text for the log, for example 4.2 s on one foot, foot down at 2.0 s | Easy | Reason text for 3 example clips matches the by-eye sheet | #23 |
+| Nov 22 | Check the clues and timeline on our own team clips (Theresia's 27 recordings, through Revallo's --video mode); tune thresholds | Medium | Most clips match the by-eye counts; clips that differ are listed | #24 |
+| Nov 25 | eval/report.py: confusion matrix per task, per-fold numbers, mix-ups compared with the scoring rules | Medium | One report covering all 3 tasks | #25 |
 
 **Watch out:** build the timeline first and compute the clues from it, so every number has one
 source. The dataset has one expert score per try and none per moment, so the timeline is measured,

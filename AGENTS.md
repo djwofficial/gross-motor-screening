@@ -20,14 +20,18 @@ Background (research question, data, how we judge success, timeline): `docs/proj
 ## Start of every session: who am I working with?
 When the user says who they are ("I'm Freya", "aku Marty"):
 1. Read `docs/people/<name>.md` (daryn, marty, revallo, louise, freya, theresia). It holds their
-   part, their files, what they need from others, and their task table with due dates.
-2. Check today's date and `git log --oneline -15` / `git branch -a`. Their next task is the first
-   row in the table whose Status is empty. Say which task it is, its due date, and whether it is
-   late or early (starting early is fine).
+   part, their files, what they need from others, and their tasks with due dates and issue numbers.
+2. Find their open tasks: `gh issue list --repo djwofficial/gross-motor-screening --label
+   owner:<name> --state open --limit 50 --json number,title,milestone,body`. Their next task is the
+   open issue with the earliest Due (in its body). Without `gh`, ask them to open the board
+   (https://github.com/users/djwofficial/projects/3) and paste the issue. Check today's date and `git log --oneline -15` /
+   `git branch -a`. Say which task it is, its due date, and whether it is late or early (starting
+   early is fine).
 3. If `docs/task_cards/<name>_<date>_*.md` exists for it, follow that card. If not, draft one from
    the row with `docs/task_card_template.md` and show it before writing code.
 4. Work on a branch `<name>/<short-task>`; stay inside their files. When the task's "Done when"
-   check passes, write `Done YYYY-MM-DD` in their Status column in the same PR.
+   check passes, open the PR with `Closes #<issue>` and the evidence. Merging it closes the issue
+   and moves the card to Done.
 If the user doesn't say who they are, ask before changing any file.
 
 ## Hard rules
@@ -38,14 +42,13 @@ If the user doesn't say who they are, ask before changing any file.
 3. **Split by child** (GroupKFold with the child as group). Never by file or attempt.
 4. **Every number needs a source**: a script that actually ran, the paper, or a cited link.
    Otherwise label it as a guess. Don't invent API calls: check rtmlib/OpenCV/sklearn source.
-5. **Children's data never goes into an AI or into git.** Points, videos, logs, child codes and
+5. **Children's data never goes into an AI, into git, or into GitHub issues.** Points, videos, logs, child codes and
    ages from testing day stay on the encrypted drive (consent form; deleted by 2026-12-25).
    Debug with group B data (CC0), `common.format.make_fake_try`, or team clips.
 6. **Pose detection runs on the unmirrored picture.** Mirror only for display.
 7. **Stay in your folder.** Change only the files of the task you were given. `common/`,
    `tests/contracts/`, `app/main.py`, `requirements*.txt`, `.github/` change only through Daryn.
    Don't edit or weaken a contract test to make it pass; ask Daryn if a signature must change.
-   You may update the Status column of your own `docs/people/<name>.md`.
 8. **Python 3.12**, versions pinned in `requirements.txt`. Don't add a dependency without
    asking Daryn (it must install on Mac and on Windows + NVIDIA).
 
