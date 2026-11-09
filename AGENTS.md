@@ -9,7 +9,9 @@ months) whose gross motor performance is below their age group. It is **never a 
 never write that it detects "abnormal development" or predicts the future. One child does one
 task at a time: 1 stand on one leg, 2 hop on one leg, 3 standing long jump. RTMPose (rtmlib
 `BodyWithFeet`, Halpe-26) finds the body points, we convert them to the dataset's 25 BODY_25
-points, compute movement clues, and a random forest gives a score 0 Bad / 1 Good / 2 Perfect.
+points, build a timeline of moments (foot down at 2.0 s) and movement clues from it, and a random
+forest gives a score 0 Bad / 1 Good / 2 Perfect. The timeline records what happened: never write
+that a child failed.
 Training data: Korean multiview child motor development dataset, **group B only** (Kim et al.
 2023, GigaScience 12, giad039). Real children are used only to test, never to retrain.
 
@@ -59,21 +61,21 @@ leg           "L" / "R"          the SUPPORT leg (the one the child stands or ho
 ## Who owns what, and the signatures that must not change
 | Owner | Files | Interface |
 |---|---|---|
-| Daryn | `common/format.py`, `common/body25.py`, `common/geometry.py`, `app/main.py`, `rescore.py`, tests, CI | `Try`, `validate`, `save`, `load`, `make_fake_try(task, leg, ...)`; `torso_length(points)`, `normalize(points)` |
-| Marty | `data/load_b.py`, `common/pick.py`, `model/` (`baseline.py`, `train_rf.py`, `predict.py`, `task_classifier.py`), `models/` | `pick_child(frames: list[(P,25,3)]) -> (T,25,3)`; `predict(task, clues) -> (score 0/1/2, confidence 0..1)`; `predict_task(points, t) -> (task 1/2/3, leg "L"/"R", confidence)`; model file `models/task{n}_rf.joblib` = `{"model", "features"}` |
-| Revallo | `features/clues.py`, `eval/report.py` | `compute(task, points, t) -> dict` with exactly `CLUE_NAMES[task]`; `explain(task, clues) -> str` |
-| Louise | `live/pose.py`, `live/convert.py`, `live/capture.py`, `live/bench_fps.py` | `PoseStream(source, mode, device).read() -> (t, keypoints (P,26,2), scores (P,26), frame)` or `None`; `halpe_to_body25(keypoints, scores) -> (...,25,3)`; `HALPE_TO_BODY25` |
-| Freya | `app/ui.py`, `app/session.py` | `Session(out_dir, child, age_months, video).save_try(tr, *, task, leg, guessed_task, guessed_leg, task_confidence, corrected, score, confidence, clues, reasons, raw26=None) -> Path`; `load_record(path)`; `LOG_FIELDS` |
-| Theresia | `viz/replay.py`, `viz/blur.py`, `live/segment.py`, `live/quality.py` | `Segmenter().update(points (25,3) or None, t) -> "idle"/"ready"/"start"/"recording"/"end"`; `check(points, fps, frame_size, start_area) -> list[str]`; `render(tr, out_path)` |
+| Daryn | `common/format.py`, `common/body25.py`, `common/geometry.py`, `app/main.py`, `rescore.py`, `model/train_rf.py`, `model/predict.py`, `models/`, tests, CI | `Try`, `validate`, `save`, `load`, `make_fake_try(task, leg, ...)`; `torso_length(points)`, `normalize(points)`; `predict(task, clues) -> (score 0/1/2, confidence 0..1)`; model file `models/task{n}_rf.joblib` = `{"model", "features"}` (`duration_s` is not a model feature) |
+| Marty | `data/load_b.py`, `common/pick.py`, `model/baseline.py`, `model/task_classifier.py` | `pick_child(frames: list[(P,25,3)]) -> (T,25,3)`; `predict_task(points, t) -> (task 1/2/3, leg "L"/"R", confidence)` |
+| Louise | `features/clues.py` (tasks 1 and 2), `eval/report.py` | `timeline(task, points, t) -> list[{"start_s", "end_s", "state"}]`; `compute(task, points, t) -> dict` with exactly `CLUE_NAMES[task]`; `explain(task, clues, events=None) -> str` |
+| Revallo | `live/pose.py`, `live/convert.py`, `live/capture.py`, `live/bench_fps.py`, `features/clues.py` (task 3, in its own functions) | `PoseStream(source, mode, device).read() -> (t, keypoints (P,26,2), scores (P,26), frame)` or `None`; `halpe_to_body25(keypoints, scores) -> (...,25,3)`; `HALPE_TO_BODY25` |
+| Freya | `app/ui.py`, `app/session.py`, `viz/replay.py` | `Session(out_dir, child, age_months, video).save_try(tr, *, task, leg, guessed_task, guessed_leg, task_confidence, corrected, score, confidence, clues, reasons, raw26=None, events=None) -> Path`; `load_record(path)`; `LOG_FIELDS`; `render(tr, out_path, ..., events=None)` |
+| Theresia | `viz/blur.py`, `live/segment.py`, `live/quality.py`; new: `live/start_area.py`, `eval/agreement.py`, `eval/dry_run_count.py` | `Segmenter().update(points (25,3) or None, t) -> "idle"/"ready"/"start"/"recording"/"end"`; `check(points, fps, frame_size, start_area) -> list[str]` |
 
 Product flow (`app/main.py`): pose stream -> `halpe_to_body25` -> `pick_child` -> `Segmenter`
 (automatic start/end; manual Start/Stop as fallback) -> `predict_task` -> operator confirms or
-corrects -> `compute` -> `predict` -> `explain` -> `Session.save_try` (JSON + `log.csv`).
+corrects -> `timeline` -> `compute` -> `predict` -> `explain` -> `Session.save_try` (JSON + `log.csv`).
 Below `CHECK_BY_TEACHER_BELOW` confidence the log says "check by teacher" instead of a score.
-No score on screen in testing mode.
+No score and no timeline on screen in testing mode.
 
 ## How to work
-- One task = one branch (`marty/load-b`, `louise/bench-fps`, ...) = one pull request into `main`.
+- One task = one branch (`marty/load-b`, `louise/clues-task1`, ...) = one pull request into `main`.
 - Before pushing: `ruff format .`, `ruff check .`, `pytest`. CI runs the same on every PR.
 - Put the "Done when" evidence from the task card (number, plot, screenshot) in the PR text.
 - Add your own behaviour tests in `tests/` (not in `tests/contracts/`).

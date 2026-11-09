@@ -1,4 +1,4 @@
-"""Pick the child when 2+ people are in the picture. Owner: Marty (Nov 15). Louise reuses it live.
+"""Pick the child when 2+ people are in the picture. Owner: Marty (Nov 15). Revallo reuses it live.
 
 Shared interface (final, change only through Daryn):
 

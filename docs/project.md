@@ -16,11 +16,14 @@ look. It is never a diagnosis and never predicts the future.
 ## The three tasks and the score
 | Task | Name | Clues we measure (features/clues.py) |
 |---|---|---|
-| 1 | Stand on one leg | time on one foot (s), touch-downs, sway (torso lengths) |
+| 1 | Stand on one leg | time on one foot (s), touch-downs, sway (torso lengths), wobble time (s) |
 | 2 | Hop on one leg | hop count, longest pause (s), touch-downs |
 | 3 | Standing long jump | feet together at take-off and landing, time in the air (s), jump size (torso lengths) |
 
-Score per try: 0 Bad, 1 Good, 2 Perfect (the dataset's expert labels).
+Score per try: 0 Bad, 1 Good, 2 Perfect (the dataset's expert labels, and the scale KEE uses).
+The dataset has one expert score per try and none per moment, so each try also gets a **timeline**
+measured from the points (foot down at 2.0 s, wobble at 4.1 s). It explains the score and never says
+that a child failed. Webcam resolution in time is one picture every 0.033 s at 30 fps.
 
 ## Data
 - **Training:** Korean multiview child motor development dataset (Kim et al. 2023,
@@ -33,10 +36,10 @@ Score per try: 0 Bad, 1 Good, 2 Perfect (the dataset's expert labels).
 
 ## Pipeline
 webcam → RTMPose (rtmlib `BodyWithFeet`, 26 points) → convert to 25 BODY_25 points →
-pick the child → automatic start/end → guess task and leg (operator confirms) → clues →
-random forest → score + confidence + reasons → JSON per try + `log.csv`.
+pick the child → automatic start/end → guess task and leg (operator confirms) → timeline →
+clues → random forest → score + confidence + reasons → JSON per try + `log.csv`.
 Below the confidence threshold the log says "check by teacher" instead of a score.
-The screen shows no score in testing mode.
+The screen shows no score and no timeline in testing mode.
 
 ## How we judge success
 1. **Offline, group B:** random forest vs baseline per task, GroupKFold by child,
@@ -44,6 +47,15 @@ The screen shows no score in testing mode.
 2. **Product:** dry run on Nov 25 (3 people × 3 tasks × 3 tries = 27 tries), rescore matches
    live 27/27, and we count how many tries automatic start/end caught.
 3. **Testing day:** agreement tables app vs KEE and KEE vs KEE.
+
+**First rough test** (one-off script, 2026-11-09, one-person files only, split by child; macro-F1,
+real numbers come from the Nov 19 gate):
+
+| Task | Always most common score | Simple rules | Random forest on clues | Per-second forest, averaged |
+|---|---|---|---|---|
+| 1 Stand on one leg | 0.21 | 0.60 | 0.64 | 0.62 |
+| 2 Hop on one leg | 0.21 | 0.31 | 0.59 | 0.65 |
+| 3 Standing long jump | 0.27 | 0.36 | 0.40 | 0.36 |
 
 ## Timeline (checkpoints)
 | CP | Date | What must exist |

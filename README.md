@@ -61,13 +61,13 @@ The live webcam mode is joined on Nov 22. Until then every part works on fake da
 ```
 common/    shared format, BODY_25 names, torso-length geometry, pick_child   (Daryn; pick: Marty)
 data/      group B loader, raw/ (ignored)                                   (Marty)
-model/     baseline, random forest, predict, task classifier; models/ files (Marty)
-features/  movement clues + reason text                                     (Revallo)
-eval/      evaluation report                                                (Revallo)
-live/      webcam + RTMPose, 26->25 conversion, fps bench                   (Louise)
+model/     baseline, task classifier (Marty); random forest, predict, models/ (Daryn)
+features/  moment timeline, movement clues, reason text        (Louise; task 3: Revallo)
+eval/      evaluation report (Louise), agreement tables (Theresia)
+live/      webcam + RTMPose, 26->25 conversion, fps check                   (Revallo)
 live/      segment.py (auto start/end), quality.py (readiness check)        (Theresia)
 app/       main.py (joins the parts, Daryn), ui.py + session.py (Freya)
-viz/       stick-figure replay, face blur                                   (Theresia)
+viz/       stick-figure replay (Freya), face blur (Theresia)
 scripts/   summarize_group_B.py (Milestone 1)
 tests/     contracts/ (the fence for every part) + test_pipeline.py (smoke test)
 docs/      task card template and task cards

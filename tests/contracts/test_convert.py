@@ -1,4 +1,4 @@
-"""Contract: live/convert.py (owner Louise). Halpe-26 -> BODY_25, checked name by name."""
+"""Contract: live/convert.py (owner Revallo). Halpe-26 -> BODY_25, checked name by name."""
 
 import numpy as np
 

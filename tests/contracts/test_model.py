@@ -1,4 +1,4 @@
-"""Contract: model/predict.py and model/task_classifier.py (owner Marty)."""
+"""Contract: model/predict.py (owner Daryn) and model/task_classifier.py (owner Marty)."""
 
 import pytest
 

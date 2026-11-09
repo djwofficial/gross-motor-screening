@@ -1,4 +1,4 @@
-"""Halpe-26 (RTMPose / rtmlib BodyWithFeet) -> BODY_25 (dataset order). Owner: Louise.
+"""Halpe-26 (RTMPose / rtmlib BodyWithFeet) -> BODY_25 (dataset order). Owner: Revallo.
 
 Drop Halpe point 17 (head) and re-order. No point is made up.
 
@@ -6,7 +6,7 @@ HALPE26_NAMES is copied from rtmlib 0.0.16, rtmlib/visualization/skeleton/halpe2
 2026-11-08 by printing it from the installed package). tests/contracts/test_convert.py checks the
 mapping name by name against common/body25.py.
 
-Louise, Nov 11: also check against mmpose configs/_base_/datasets/halpe26.py and plot one labelled
+Revallo, Nov 11: also check against mmpose configs/_base_/datasets/halpe26.py and plot one labelled
 webcam frame to confirm left and right on a real picture (unmirrored).
 """
 

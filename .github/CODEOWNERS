@@ -8,6 +8,9 @@
 /tests/contracts/      @djwofficial
 /app/main.py           @djwofficial
 /rescore.py            @djwofficial
+/model/train_rf.py     @djwofficial
+/model/predict.py      @djwofficial
+/models/               @djwofficial
 /requirements*.txt     @djwofficial
 /pyproject.toml        @djwofficial
 /.github/              @djwofficial
@@ -15,26 +18,30 @@
 /CLAUDE.md             @djwofficial
 
 # Marty
-# /data/               @MARTY_USERNAME
-# /model/              @MARTY_USERNAME
-# /models/             @MARTY_USERNAME
-# /common/pick.py      @MARTY_USERNAME
+# /data/                     @MARTY_USERNAME
+# /model/baseline.py         @MARTY_USERNAME
+# /model/task_classifier.py  @MARTY_USERNAME
+# /common/pick.py            @MARTY_USERNAME
+
+# Louise (clues tasks 1 and 2; Revallo owns task 3 in the same file)
+# /features/                 @LOUISE_USERNAME @REVALLO_USERNAME
+# /eval/report.py            @LOUISE_USERNAME
 
 # Revallo
-# /features/           @REVALLO_USERNAME
-# /eval/               @REVALLO_USERNAME
-
-# Louise
-# /live/pose.py        @LOUISE_USERNAME
-# /live/convert.py     @LOUISE_USERNAME
-# /live/capture.py     @LOUISE_USERNAME
-# /live/bench_fps.py   @LOUISE_USERNAME
+# /live/pose.py              @REVALLO_USERNAME
+# /live/convert.py           @REVALLO_USERNAME
+# /live/capture.py           @REVALLO_USERNAME
+# /live/bench_fps.py         @REVALLO_USERNAME
 
 # Freya
-# /app/ui.py           @FREYA_USERNAME
-# /app/session.py      @FREYA_USERNAME
+# /app/ui.py                 @FREYA_USERNAME
+# /app/session.py            @FREYA_USERNAME
+# /viz/replay.py             @FREYA_USERNAME
 
 # Theresia
-# /viz/                @THERESIA_USERNAME
-# /live/segment.py     @THERESIA_USERNAME
-# /live/quality.py     @THERESIA_USERNAME
+# /viz/blur.py               @THERESIA_USERNAME
+# /live/segment.py           @THERESIA_USERNAME
+# /live/quality.py           @THERESIA_USERNAME
+# /live/start_area.py        @THERESIA_USERNAME
+# /eval/agreement.py         @THERESIA_USERNAME
+# /eval/dry_run_count.py     @THERESIA_USERNAME

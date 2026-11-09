@@ -1,4 +1,4 @@
-"""Score one try from its clues. Owner: Marty (real model by Nov 19).
+"""Score one try from its clues. Owner: Daryn (real model by Nov 19).
 
 Shared interface (final, change only through Daryn):
 

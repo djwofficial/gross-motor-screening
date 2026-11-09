@@ -37,6 +37,27 @@ def test_files_log_and_round_trip(tmp_path):
     np.testing.assert_allclose(rec["try"].points, make_fake_try(task=2).points)
 
 
+def test_events_are_saved_in_the_json_only(tmp_path):
+    tr = make_fake_try(task=1)
+    events = [{"start_s": 0.0, "end_s": 1.0, "state": "steady"}]
+    path = Session(tmp_path, child="K05", age_months=48).save_try(
+        tr,
+        task=1,
+        leg="L",
+        guessed_task=1,
+        guessed_leg="L",
+        task_confidence=0.8,
+        corrected=False,
+        score=1,
+        confidence=0.9,
+        clues={"duration_s": tr.duration},
+        reasons="test",
+        events=events,
+    )
+    assert load_record(path)["events"] == events
+    assert "events" not in LOG_FIELDS
+
+
 def test_numbering_continues_after_restart(tmp_path):
     _save(Session(tmp_path, child="K04", age_months=50))
     assert _save(Session(tmp_path, child="K04", age_months=50)).name == "K04_task2_try2_L.json"

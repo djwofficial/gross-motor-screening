@@ -5,13 +5,14 @@ Shared interface (final, change only through Daryn):
     s = Session(out_dir, child="K03", age_months=47, video=False)
     path = s.save_try(tr, raw26=None, task=2, leg="L", guessed_task=2, guessed_leg="L",
                       task_confidence=0.8, corrected=False, score=1, confidence=0.71,
-                      clues={...}, reasons="3 hops, ...")
+                      clues={...}, reasons="3 hops, ...", events=[...])
     record = load_record(path)       # dict with "try" (common.format.Try) and everything saved
 
 Files:  {out_dir}/{child}_task{task}_try{n}_{leg}.json  (n counts per child and task, from 1)
         {out_dir}/log.csv  (LOG_FIELDS)
 Every try is written as soon as it ends, so a crash never loses earlier tries.
-Video saving (only when the parent ticked level 3 and V is on) is Freya's Nov 15 task.
+events is the moment timeline (features.clues.timeline); it goes in the JSON file only.
+Video saving (only when the parent ticked level 3 and V is on) is Revallo's Nov 15 task.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ class Session:
         clues: dict,
         reasons: str,
         raw26: np.ndarray | None = None,
+        events: list[dict] | None = None,
     ) -> Path:
         validate(tr)
         n = self._counts.get(task, 0) + 1
@@ -103,6 +105,7 @@ class Session:
             "confidence": confidence,
             "check_by_teacher": check,
             "reasons": reasons,
+            "events": events,
         }
         path = self.out_dir / name
         tmp = path.with_suffix(".json.tmp")

@@ -1,4 +1,4 @@
-"""Baseline, random forest, task classifier and prediction. Owner: Marty.
+"""Baseline, random forest, task classifier and prediction. Owners: Marty (baseline, task classifier), Daryn (random forest, predict).
 
 from model import predict           # predict(task, clues) -> (score, confidence)
 """

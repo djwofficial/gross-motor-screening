@@ -1,4 +1,4 @@
-"""Webcam (or video file) -> RTMPose Halpe-26 points per frame. Owner: Louise.
+"""Webcam (or video file) -> RTMPose Halpe-26 points per frame. Owner: Revallo.
 
 Shared interface (final, change only through Daryn):
 
@@ -27,7 +27,7 @@ from live.convert import HALPE_TO_BODY25
 
 
 class PoseStream:
-    """Real webcam / video stream. TODO Louise (Nov 10-15): capture thread, 720p30, time stamps,
+    """Real webcam / video stream. TODO Revallo (Nov 10-13): capture thread, 720p30, time stamps,
     auto-framing off, resample to 30 fps happens later on the whole try (not here)."""
 
     def __init__(

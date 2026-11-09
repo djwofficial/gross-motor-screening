@@ -23,7 +23,7 @@ import numpy as np
 from app.session import Session
 from common.format import Try
 from common.pick import pick_child
-from features.clues import compute, explain
+from features.clues import compute, explain, timeline
 from live.convert import halpe_to_body25
 from live.pose import FakePoseStream
 from live.segment import Segmenter
@@ -37,7 +37,7 @@ def score_try(tr: Try, task: int) -> tuple[dict, int, float, str]:
     """Clues, score, confidence and reason text for one try (also used by rescore.py)."""
     clues = compute(task, tr.points, tr.t)
     score, confidence = predict(task, clues)
-    return clues, score, confidence, explain(task, clues)
+    return clues, score, confidence, explain(task, clues, timeline(task, tr.points, tr.t))
 
 
 def finish_try(
@@ -68,6 +68,7 @@ def finish_try(
         confidence=confidence,
         clues=clues,
         reasons=reasons,
+        events=timeline(task, tr.points, tr.t),
     )
 
 
@@ -83,7 +84,7 @@ def run_fake(args) -> list[Path]:
     while (item := stream.read()) is not None:
         t, kp26, sc26, _frame = item
         people25 = halpe_to_body25(kp26, sc26)  # (P, 25, 3)
-        child25 = pick_child([people25])[0]  # live: Louise replaces this with a tracked pick
+        child25 = pick_child([people25])[0]  # live: Revallo replaces this with a tracked pick
         found = people25.shape[0] > 0
         raw = (
             np.concatenate([kp26, sc26[..., None]], axis=-1)[0]
@@ -146,7 +147,7 @@ def main(argv=None) -> int:
 
     if not args.fake:
         print(
-            "Live mode is joined on Nov 22 (Louise's PoseStream + Freya's GUI). Use --fake for now."
+            "Live mode is joined on Nov 22 (Revallo's PoseStream + Freya's GUI). Use --fake for now."
         )
         return 2
     saved = run_fake(args)
