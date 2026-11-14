@@ -90,6 +90,14 @@ class Session:
             raise ValueError("consent_level must be 1, 2 or 3")
         self.consent_level = consent_level
         self.log_path = self.out_dir / "log.csv"
+        if self.log_path.exists() and self.log_path.stat().st_size > 0:
+            with self.log_path.open(newline="", encoding="utf-8") as f:
+                header = next(csv.reader(f), [])
+            if header != LOG_FIELDS:  # rows would land under the wrong columns
+                raise ValueError(
+                    f"{self.log_path} has other columns than LOG_FIELDS (made by an older "
+                    "version?). Use a new output folder."
+                )
         self._counts: dict[int, int] = {}
         for p in self.out_dir.glob(
             f"{child}_task*_try*_*.json"

@@ -307,3 +307,11 @@ def test_killed_mid_session_keeps_earlier_tries(tmp_path):
 def test_controller_rejects_unknown_mode():
     with pytest.raises(ValueError):
         Controller(mode="other")
+
+
+def test_old_log_with_other_columns_is_refused(tmp_path):
+    from app.session import Session
+
+    (tmp_path / "log.csv").write_text("time,child,age_months\n2026-11-08,K00,48\n")
+    with pytest.raises(ValueError, match="other columns"):
+        Session(tmp_path, child="K01", age_months=48)
