@@ -2,7 +2,7 @@
 
 Shared interface (final, change only through Daryn):
 
-    s = Session(out_dir, child="K03", age_months=47, video=False)
+    s = Session(out_dir, child="K03", age_months=47, video=False, consent_level=None)
     path = s.save_try(tr, raw26=None, task=2, leg="L", guessed_task=2, guessed_leg="L",
                       task_confidence=0.8, corrected=False, score=1, confidence=0.71,
                       clues={...}, reasons="3 hops, ...", events=[...])
@@ -13,12 +13,18 @@ Files:  {out_dir}/{child}_task{task}_try{n}_{leg}.json  (n counts per child and 
 Every try is written as soon as it ends, so a crash never loses earlier tries.
 events is the moment timeline (features.clues.timeline); it goes in the JSON file only.
 Video saving (only when the parent ticked level 3 and V is on) is Revallo's Nov 15 task.
+
+Added 2026-11-14 (Freya, #40; optional, so old calls still work; needs Daryn's OK):
+    consent_level  1 / 2 / 3 from the consent form, written to the log and the JSON meta.
+    age_in_range   1 if age_months is inside the training range 36-53 months, else 0 (flag).
+Files and the log are flushed to disk (fsync) before save_try returns (#42 crash-safe).
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +37,8 @@ LOG_FIELDS = [
     "time",
     "child",
     "age_months",
+    "age_in_range",
+    "consent_level",
     "task",
     "try",
     "leg",
@@ -49,11 +57,38 @@ LOG_FIELDS = [
 ]
 
 
+AGE_RANGE_MONTHS = (36, 53)  # group B, the model's training range
+
+
+def age_in_range(age_months: int) -> bool:
+    return AGE_RANGE_MONTHS[0] <= int(age_months) <= AGE_RANGE_MONTHS[1]
+
+
+def _write_durable(path: Path, text: str) -> None:
+    """Write text to path atomically and make sure it is on the disk before returning."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)  # atomic: a half-written file never appears
+
+
 class Session:
-    def __init__(self, out_dir, child: str, age_months: int, video: bool = False):
+    def __init__(
+        self,
+        out_dir,
+        child: str,
+        age_months: int,
+        video: bool = False,
+        consent_level: int | None = None,
+    ):
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.child, self.age_months, self.video = child, int(age_months), bool(video)
+        if consent_level not in (None, 1, 2, 3):
+            raise ValueError("consent_level must be 1, 2 or 3")
+        self.consent_level = consent_level
         self.log_path = self.out_dir / "log.csv"
         self._counts: dict[int, int] = {}
         for p in self.out_dir.glob(
@@ -92,6 +127,8 @@ class Session:
                 "task": task,
                 "try": n,
                 "leg": leg,
+                "consent_level": self.consent_level,
+                "video": self.video,
             },
             "t": tr.t.tolist(),
             "points25": tr.points.tolist(),
@@ -108,12 +145,10 @@ class Session:
             "events": events,
         }
         path = self.out_dir / name
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(rec))
-        tmp.replace(path)  # atomic: a half-written file never appears
+        _write_durable(path, json.dumps(rec))
 
         new = not self.log_path.exists()
-        with self.log_path.open("a", newline="") as f:
+        with self.log_path.open("a", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=LOG_FIELDS)
             if new:
                 w.writeheader()
@@ -122,6 +157,8 @@ class Session:
                     "time": datetime.now().isoformat(timespec="seconds"),
                     "child": self.child,
                     "age_months": self.age_months,
+                    "age_in_range": int(age_in_range(self.age_months)),
+                    "consent_level": "" if self.consent_level is None else self.consent_level,
                     "task": task,
                     "try": n,
                     "leg": leg,
@@ -139,11 +176,13 @@ class Session:
                     "json_file": name,
                 }
             )
+            f.flush()
+            os.fsync(f.fileno())
         return path
 
 
 def load_record(path) -> dict:
-    rec = json.loads(Path(path).read_text())
+    rec = json.loads(Path(path).read_text(encoding="utf-8"))
     rec["try"] = validate(
         Try(
             points=np.asarray(rec["points25"], dtype=np.float32),
