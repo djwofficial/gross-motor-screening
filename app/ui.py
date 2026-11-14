@@ -8,6 +8,7 @@ screen NEVER shows a score or the timeline (the screen faces the child; KEE scor
     python -m app.ui --fake --mode manual      # Space starts and stops each try
     python -m app.ui --video clip.mp4 --device cpu   # a recorded clip (needs rtmlib)
     python -m app.ui --camera 0 --device cuda        # live webcam (needs rtmlib)
+    python -m app.ui --camera 0 --device cpu --pose-mode lightweight   # laptop without NVIDIA
     options: --view stick|camera|neutral  --out runs/2026-11-29
 
 Screens (Controller.state):
@@ -633,6 +634,12 @@ def main(argv=None) -> int:
     ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
     ap.add_argument("--view", choices=["stick", "camera", "neutral"], default="stick")
     ap.add_argument("--device", default="cuda", help="cuda or cpu (rtmlib)")
+    ap.add_argument(
+        "--pose-mode",
+        choices=["balanced", "lightweight", "performance"],
+        default="balanced",
+        help="rtmlib model size; the plan uses balanced, lightweight is faster on a CPU",
+    )
     ap.add_argument("--out", type=Path, default=Path("runs") / date.today().isoformat())
     args = ap.parse_args(argv)
 
@@ -644,7 +651,7 @@ def main(argv=None) -> int:
         from live.pose import PoseStream
 
         source_arg = str(args.video) if args.video else args.camera
-        stream = PoseStream(source=source_arg, mode="balanced", device=args.device)
+        stream = PoseStream(source=source_arg, mode=args.pose_mode, device=args.device)
         w = int(stream.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         h = int(stream.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
         size, source = (w, h), ("video" if args.video else "webcam")
