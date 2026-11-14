@@ -209,7 +209,9 @@ def render(
         raise RuntimeError(f"OpenCV could not open a video writer for {out_path}")
     m = tr.meta
     info = " ".join(
-        f"{k}={m[k]}" for k in ("source", "child", "task", "leg", "camera") if m.get(k) is not None
+        f"{k}={m[k]}"
+        for k in ("source", "child", "task", "leg", "camera", "label")
+        if m.get(k) is not None
     )
     t0, t1 = float(tr.t[0]), float(tr.t[-1])
     try:
