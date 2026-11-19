@@ -350,6 +350,12 @@ def _clues_task1(points: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[
 HOP_BOUNCE = 0.1
 HOP_WINDOW_S = 0.5
 HOP_SEP_S = 0.2
+# The lifted foot must be at least HOP_LIFT torso lengths above the hopping foot at the bounce;
+# otherwise the bounce is a body bob, not a hop (same height as task 1's LIFT_PEAK). By eye
+# 2026-11-19 (Louise, 7 camera-2 clips, by_eye_sheet.csv): without it the program found one
+# extra hop in 4 of 5 Bad clips; with 0.3, 6 of 7 clips match (B213_GMS_2_5_2: 0 vs 1 by eye).
+# Task 2 random forest macro-F1 / kappa: 0.60 / 0.59 without, 0.66 / 0.66 with.
+HOP_LIFT = 0.3
 # Both feet down: both ankles within ONE_FOOT_GAP of the floor (lowest ankle within FLOOR_WIN_S;
 # the floor line drifts as the child hops toward the camera). Task 1's "ankles level" fails here:
 # in the air the hopping foot rises level with the lifted one.
@@ -383,7 +389,7 @@ def _hop_frames(q: np.ndarray, t: np.ndarray):
     return on_one, missing, gap, fast
 
 
-def _hop_peaks(fast: np.ndarray, t: np.ndarray, i0: int, i1: int) -> list[int]:
+def _hop_peaks(fast: np.ndarray, gap: np.ndarray, t: np.ndarray, i0: int, i1: int) -> list[int]:
     peaks: list[int] = []
     for i in range(max(i0, 1), min(i1, len(t) - 2) + 1):
         if not (fast[i] >= fast[i - 1] and fast[i] > fast[i + 1] and fast[i] > HOP_BOUNCE):
@@ -393,7 +399,8 @@ def _hop_peaks(fast: np.ndarray, t: np.ndarray, i0: int, i1: int) -> list[int]:
                 peaks[-1] = i
             continue
         peaks.append(i)
-    return peaks
+    # a bounce while the lifted foot is barely up is a body bob, not a hop
+    return [i for i in peaks if gap[i] >= HOP_LIFT]
 
 
 def _timeline_task2(points: np.ndarray, t: np.ndarray) -> list[dict]:
@@ -413,7 +420,7 @@ def _timeline_task2(points: np.ndarray, t: np.ndarray) -> list[dict]:
         if s != _ONE:
             spans.append((i0, s))
             continue
-        peaks = _hop_peaks(fast, t, i0, i1)
+        peaks = _hop_peaks(fast, gap, t, i0, i1)
         if not peaks:
             spans.append((i0, _PAUSE))
             continue
