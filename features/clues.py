@@ -29,8 +29,8 @@ duration_s: live, the length of a try is set by our automatic start and end, so 
 not learn from it. Adding or renaming a clue is fine, but tell Daryn and Marty and update
 CLUE_NAMES in the same PR.
 
-Task 1 is real (Louise, #20). STUB for tasks 2-3: only duration_s is real; the other values are
-0.0 and the timeline is one UNKNOWN block until they land (tasks 2-3 by Nov 17, explain by Nov 19). Ideas
+Tasks 1 and 2 are real (Louise, #20 and #21). STUB for task 3: only duration_s is real; the other
+values are 0.0 and the timeline is one UNKNOWN block until Revallo's version lands. Ideas
 per clue: Job Card 2 in the team Google Doc.
 """
 
@@ -249,6 +249,122 @@ def _clues_task1(points: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[
     return out
 
 
+# --- Task 2 (hop on one leg), Louise ---------------------------------------------------------
+# A hop = one fast up-and-down bounce of the mid-hip while one foot is clearly above the other.
+# Fast part of the hip = hip height minus its HOP_WINDOW_S moving average; a peak above HOP_BOUNCE
+# (torso lengths), at least HOP_SEP_S after the previous one, is a hop. Foot height alone misses
+# small hops (feet only 0.05-0.12 torso lengths off the floor in B054_GMS_2_1_2).
+# By eye 2026-11-19 (Louise, camera 2): B054_GMS_2_1_2 10 hops (we find 10), B209_GMS_2_2_2 2 (2),
+# B210_GMS_2_2_2 0 (1). Group B one-person task 2 files: median hops 1 / 3 / 6 (Bad/Good/Perfect)
+# (scripts/check_clues_task2.py). 0.15 would give B210 0 but B209 1 and B054 4.
+HOP_BOUNCE = 0.1
+HOP_WINDOW_S = 0.5
+HOP_SEP_S = 0.2
+# Both feet down: both ankles within ONE_FOOT_GAP of the floor (lowest ankle within FLOOR_WIN_S;
+# the floor line drifts as the child hops toward the camera). Task 1's "ankles level" fails here:
+# in the air the hopping foot rises level with the lifted one.
+FLOOR_WIN_S = 1.0
+# Two hops further apart than this have a pause between them (normal rhythm in B054: about 0.35 s;
+# start value, tune by eye).
+PAUSE_GAP_S = 0.7
+
+_HOP, _PAUSE = "hop", "pause"
+
+
+def _rolling_min(x: np.ndarray, t: np.ndarray, window_s: float) -> np.ndarray:
+    half = window_s / 2
+    lo = np.searchsorted(t, t - half, side="left")
+    hi = np.searchsorted(t, t + half, side="right")
+    return np.array([x[a:z].min() for a, z in zip(lo, hi, strict=True)])
+
+
+def _hop_frames(q: np.ndarray, t: np.ndarray):
+    """-> (on_one_foot, missing, ankle gap, fast hip height), each (T,)."""
+    yl = _foot_height(q, b.L_ANKLE, b.L_HEEL)
+    yr = _foot_height(q, b.R_ANKLE, b.R_HEEL)
+    missing = np.isnan(yl) | np.isnan(yr)
+    yl, yr = _fill_nan(yl), _fill_nan(yr)
+    floor = _rolling_min(np.minimum(yl, yr), t, FLOOR_WIN_S)
+    gap = np.abs(yl - yr)
+    both_down = (yl - floor < ONE_FOOT_GAP) & (yr - floor < ONE_FOOT_GAP)
+    on_one = ~both_down & (gap > ONE_FOOT_GAP)
+    hip = _smooth(_fill_nan(q[:, b.MID_HIP, 1]), t, 0.1)
+    fast = hip - _smooth(hip, t, HOP_WINDOW_S)
+    return on_one, missing, gap, fast
+
+
+def _hop_peaks(fast: np.ndarray, t: np.ndarray, i0: int, i1: int) -> list[int]:
+    peaks: list[int] = []
+    for i in range(max(i0, 1), min(i1, len(t) - 2) + 1):
+        if not (fast[i] >= fast[i - 1] and fast[i] > fast[i + 1] and fast[i] > HOP_BOUNCE):
+            continue
+        if peaks and t[i] - t[peaks[-1]] < HOP_SEP_S:
+            if fast[i] > fast[peaks[-1]]:
+                peaks[-1] = i
+            continue
+        peaks.append(i)
+    return peaks
+
+
+def _timeline_task2(points: np.ndarray, t: np.ndarray) -> list[dict]:
+    """Each hop is its own event, so the hop count is the number of hop events. A hop runs from
+    the low point before its bounce to the next hop's start (or to the low point after it when a
+    pause or both feet follow)."""
+    try:
+        q = normalize(points)
+    except ValueError:
+        return _whole(t)
+    on_one, missing, gap, fast = _hop_frames(q, t)
+    base = [_UNK if m else (_ONE if o else _BOTH) for m, o in zip(missing, on_one, strict=True)]
+    runs = _drop_low_lifts(_merge_short(_runs(base), t, MIN_RUN_S), gap)
+
+    spans: list[tuple[int, str]] = []  # (first frame, state); each span runs to the next one
+    for s, i0, i1 in runs:
+        if s != _ONE:
+            spans.append((i0, s))
+            continue
+        peaks = _hop_peaks(fast, t, i0, i1)
+        if not peaks:
+            spans.append((i0, _PAUSE))
+            continue
+        # low point before each peak (bounded by the previous peak and the stretch start)
+        starts = []
+        for k, pk in enumerate(peaks):
+            lo = peaks[k - 1] + 1 if k else i0
+            starts.append(lo + int(np.argmin(fast[lo : pk + 1])))
+        if starts[0] > i0:
+            spans.append((i0, _PAUSE))
+        for k, pk in enumerate(peaks):
+            spans.append((starts[k], _HOP))
+            nxt_peak = peaks[k + 1] if k + 1 < len(peaks) else None
+            if nxt_peak is None or t[nxt_peak] - t[pk] > PAUSE_GAP_S:
+                hi = starts[k + 1] if nxt_peak is not None else i1 + 1
+                after = pk + int(np.argmin(fast[pk:hi])) if hi > pk else pk
+                if after + 1 < hi:
+                    spans.append((after + 1, _PAUSE))
+
+    events = []
+    for k, (i0, s) in enumerate(spans):
+        end = t[spans[k + 1][0]] if k + 1 < len(spans) else t[-1]
+        events.append({"start_s": float(t[i0]), "end_s": float(end), "state": s})
+    return events
+
+
+def _clues_task2(t: np.ndarray, events: list[dict]) -> dict[str, float]:
+    out = {name: 0.0 for name in CLUE_NAMES[2]}
+    out["duration_s"] = _duration(t)
+    hops = [e for e in events if e["state"] == _HOP]
+    out["hops"] = float(len(hops))
+    # longest time between two hops: from a hop's end to the next hop's start (pauses, both feet)
+    gaps = [b_["start_s"] - a["end_s"] for a, b_ in zip(hops, hops[1:], strict=False)]
+    out["longest_pause_s"] = float(max(gaps)) if gaps else 0.0
+    # the lifted foot came down and went up again: both_feet between two one-foot stretches
+    on = [e["state"] in (_HOP, _PAUSE) for e in events]
+    stretches = sum(1 for k, x in enumerate(on) if x and (k == 0 or not on[k - 1]))
+    out["touchdowns"] = float(max(stretches - 1, 0))
+    return out
+
+
 # --- Shared interface ------------------------------------------------------------------------
 
 
@@ -257,6 +373,8 @@ def timeline(task: int, points: np.ndarray, t: np.ndarray) -> list[dict]:
         raise ValueError("task must be 1, 2 or 3")
     if task == 1:
         return _timeline_task1(points, t)
+    if task == 2:
+        return _timeline_task2(points, t)
     _ = normalize(points)  # torso lengths, y up; the owners build the moments from this
     return _whole(t)
 
@@ -267,6 +385,8 @@ def compute(task: int, points: np.ndarray, t: np.ndarray) -> dict[str, float]:
     events = timeline(task, points, t)
     if task == 1:
         return _clues_task1(points, t, events)
+    if task == 2:
+        return _clues_task2(t, events)
     out = {name: 0.0 for name in CLUE_NAMES[task]}
     out["duration_s"] = _duration(t)
     return out
@@ -313,12 +433,51 @@ def _explain_task1(c: dict[str, float], events: list[dict] | None) -> str:
     return ", ".join(parts)
 
 
+def _moments_task2(events: list[dict]) -> list[str]:
+    """'hops from 0.9 to 4.6 s', 'pause at 2.0 s', 'foot down at 3.1 s', in time order."""
+    out = []
+    prev = None
+    run_start = run_end = None  # current run of back-to-back hops
+    for e in events:
+        s = e["state"]
+        if s == _HOP:
+            if prev != _HOP:
+                run_start = e["start_s"]
+            run_end = e["end_s"]
+        elif prev == _HOP:
+            out.append(f"hops from {run_start:.1f} to {run_end:.1f} s")
+        if s == _PAUSE and prev == _HOP:
+            out.append(f"pause at {e['start_s']:.1f} s")
+        if s == _BOTH and prev in (_HOP, _PAUSE):
+            out.append(f"foot down at {e['start_s']:.1f} s")
+        prev = s
+    if prev == _HOP:
+        out.append(f"hops from {run_start:.1f} to {run_end:.1f} s")
+    return out
+
+
+def _explain_task2(c: dict[str, float], events: list[dict] | None) -> str:
+    """Says what was measured, never that the child failed (team rule)."""
+    if c["hops"] <= 0:
+        parts = ["no hop seen"]
+    else:
+        parts = [_plural(c["hops"], "hop"), _plural(c["touchdowns"], "touch-down")]
+        if c["longest_pause_s"] > 0:
+            parts.append(f"longest pause {c['longest_pause_s']:.1f} s")
+    if events:
+        moments = _moments_task2(events)
+        if len(moments) > MAX_MOMENTS:
+            moments = moments[:MAX_MOMENTS] + ["..."]
+        parts += moments
+    return ", ".join(parts)
+
+
 def explain(task: int, clues: dict[str, float], events: list[dict] | None = None) -> str:
     c = clues
     if task == 1:
         return _explain_task1(c, events)
     if task == 2:
-        return f"{c['hops']:.0f} hops, longest pause {c['longest_pause_s']:.1f} s, {c['touchdowns']:.0f} touch-downs"
+        return _explain_task2(c, events)
     if task == 3:
         return f"feet gap {c['feet_gap_takeoff']:.2f} at take-off, {c['air_s']:.2f} s in the air, jump size {c['jump_size']:.2f}"
     raise ValueError("task must be 1, 2 or 3")
