@@ -48,6 +48,10 @@ python scripts/summarize_group_B.py
 The first line must be `files: 4661 | children: 106 | attempts: 1555`.
 
 ## 3. Run
+**Open the GUI with a double-click:** `Open GUI.command` (Mac, Finder) or `Open GUI.bat`
+(Windows + NVIDIA, Explorer) in the repo root. The first time on a Mac, allow Terminal to use the camera.
+Keys still work; every key is also a button in the bottom bar.
+
 ```bash
 python -m app.demo                           # open GUI: live webcam + stick figure + live score (0 Bad / 1 Good / 2 Perfect)
 python -m app.ui --camera 0 --device cpu --pose-mode lightweight --show-score   # Mac live GUI

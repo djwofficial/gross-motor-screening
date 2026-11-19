@@ -2,8 +2,9 @@
 and a short summary after Enter. Used on testing day via `python -m app.ui --show-score`
 (decided by Daryn, 2026-11-19); without that flag app.ui shows no score.
 
-Same keys and pipeline as app.ui (Runner, Controller, Session, app.main.score_try), so saved tries
-and log.csv are identical; only the picture differs. app/ui.py is not changed.
+Same keys, pipeline and window as app.ui (Runner, Controller, Session, app.main.score_try,
+app.screen), so saved tries and log.csv are identical; only the score cards are added. Every key
+is also a button in the bottom bar.
 
     python -m app.demo --camera 0 --device cuda            # live webcam, manual Space start/stop
     python -m app.demo --fake                               # fake tries, no webcam or GPU
@@ -26,19 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-from app.ui import (
-    SCREEN_H,
-    SCREEN_W,
-    STATE_COLOURS,
-    STATUS_H,
-    Runner,
-    big_lines,
-    key_name,
-    status_lines,
-)
+from app.ui import Runner
 
-SCORE_NAMES = {0: "Bad", 1: "Good", 2: "Perfect"}
-SCORE_COLOURS = {0: (60, 60, 240), 1: (0, 200, 255), 2: (80, 220, 80)}  # BGR
 LIVE_EVERY_S = 0.5  # re-score the try so far this often
 LIVE_MIN_S = 1.0  # need at least this much of the try before a live score
 
@@ -106,156 +96,19 @@ class DemoRunner(Runner):
             }
 
 
-def _text(img, line, xy, size, colour, thick=2):
-    import cv2
+def draw_demo(runner: DemoRunner, view: str = "camera"):
+    """Camera picture with the points, live score card and last saved try (app.screen)."""
+    from app.screen import render
 
-    cv2.putText(img, line, xy, cv2.FONT_HERSHEY_SIMPLEX, size, (0, 0, 0), thick + 4, cv2.LINE_AA)
-    cv2.putText(img, line, xy, cv2.FONT_HERSHEY_SIMPLEX, size, colour, thick, cv2.LINE_AA)
-
-
-def _panel(img, x, y, w, h):
-    sub = img[y : y + h, x : x + w]
-    sub[:] = (sub * 0.35).astype(np.uint8)
+    return render(runner, view, show_score=True).img
 
 
-def summary_lines(r: dict) -> tuple[list[str], tuple[int, int, int]]:
-    """Plain words for the last saved try. Reference only, never a diagnosis."""
-    from common.body25 import TASKS
-
-    head = f"Task {r['task']} ({TASKS[r['task']]}), leg {r['leg']}"
-    if r["check"] or r["score"] is None:
-        return (
-            [head, "Model is unsure: check by teacher", r["reasons"]],
-            (200, 200, 200),
-        )
-    s = int(r["score"])
-    words = {
-        0: "did not complete the task this time",
-        1: "completed the task with some difficulty",
-        2: "completed the task smoothly",
-    }[s]
-    return (
-        [
-            head,
-            f"Score {s} {SCORE_NAMES[s]} (sure {r['confidence']:.0%}): {words}",
-            r["reasons"],
-            "Reference only, not a diagnosis.",
-        ],
-        SCORE_COLOURS[s],
-    )
-
-
-def draw_demo(runner: DemoRunner):
-    """Mirrored camera picture with the points drawn on it, live score, status bar."""
-    import cv2
-
-    from viz.replay import draw_figure
-
-    c = runner.ctrl
-    img = np.full((SCREEN_H + STATUS_H, SCREEN_W, 3), 25, dtype=np.uint8)
-    area = img[:SCREEN_H]
-    fw, fh = runner.frame_size
-    s = min(SCREEN_W / fw, SCREEN_H / fh)
-    dw, dh = int(round(fw * s)), int(round(fh * s))
-    ox, oy = (SCREEN_W - dw) // 2, (SCREEN_H - dh) // 2
-    if runner.last_frame is not None:
-        area[oy : oy + dh, ox : ox + dw] = cv2.resize(cv2.flip(runner.last_frame, 1), (dw, dh))
-    if runner.last_points is not None:
-        pts = runner.last_points.copy()
-        pts[:, 0] = np.where(pts[:, 2] > 0, fw - pts[:, 0], 0)  # mirror like the picture
-        draw_figure(area, pts, s, ox, oy, labels=False, thick=3)
-
-    colour = STATE_COLOURS.get(c.state, (200, 200, 200))
-    cv2.rectangle(img, (0, 0), (SCREEN_W - 1, SCREEN_H - 1), colour, 6)
-    _text(
-        img,
-        "Screening aid, not a diagnosis",
-        (SCREEN_W - 470, SCREEN_H - 20),
-        0.7,
-        (255, 255, 255),
-    )
-
-    y = 80
-    for i, line in enumerate(big_lines(c)):
-        _text(img, line, (40, y), 1.3 if i == 0 else 0.9, colour)
-        y += 55 if i == 0 else 42
-
-    live = runner.live
-    if live:
-        _panel(img, SCREEN_W - 580, 20, 560, 130)
-        if "error" in live:
-            _text(img, live["error"][:50], (SCREEN_W - 565, 70), 0.6, (230, 230, 230), 1)
-        else:
-            sc = int(live["score"])
-            tk = int(live.get("task") or 1)
-            conf = float(live.get("confidence") or 0.0)
-            label = f"Task {tk} LIVE: {sc} {SCORE_NAMES[sc]} ({conf:.0%})"
-            _text(img, label, (SCREEN_W - 565, 70), 1.05, SCORE_COLOURS[sc], 3)
-            _text(img, live["reasons"][:58], (SCREEN_W - 565, 115), 0.6, (230, 230, 230), 1)
-
-    if runner.result and c.state in ("idle", "ready"):
-        lines, col = summary_lines(runner.result)
-        _panel(img, 20, SCREEN_H - 210, SCREEN_W - 40, 180)
-        yy = SCREEN_H - 170
-        for i, line in enumerate(lines):
-            _text(
-                img,
-                line[:90],
-                (40, yy),
-                1.0 if i == 1 else 0.7,
-                col if i == 1 else (230, 230, 230),
-                2 if i == 1 else 1,
-            )
-            yy += 42
-
-    y = SCREEN_H + 26
-    for i, line in enumerate(status_lines(c)):
-        cv2.putText(
-            img,
-            line[:140],
-            (12, y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            colour if i == 0 else (230, 230, 230),
-            1,
-            cv2.LINE_AA,
-        )
-        y += 27
-    return img
-
-
-def run_demo(stream, out_dir, mode="manual", frame_size=(1280, 720), source="fake"):
-    import cv2
-
-    from app.ui import PoseWorker
+def run_demo(stream, out_dir, mode="manual", frame_size=(1280, 720), source="fake", view="camera"):
+    """Same window loop as app.ui.run_gui (app.screen.run_window), with the live score."""
+    from app.screen import run_window
 
     runner = DemoRunner(out_dir, mode=mode, frame_size=frame_size, source=source)
-    name = "Gross motor screening (screening aid, not a diagnosis)"
-    cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-    worker = PoseWorker(stream, paced=source == "fake")
-    try:
-        while not runner.quit:
-            for item in worker.take(wait_s=0.005):
-                runner.feed(item)
-            if worker.error is not None:
-                runner.ctrl.message = (
-                    f"Camera stopped ({worker.error}). Earlier tries are saved. Backspace if a "
-                    "try is open, then Q; check the camera and restart with the same child code."
-                )
-            elif worker.ended and worker.items.empty():
-                runner.ctrl.message = "The video ended. Press Q to quit."
-            cv2.imshow(name, draw_demo(runner))
-            runner.press(key_name(cv2.waitKeyEx(1)))
-            if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
-                break
-    finally:
-        stopped = worker.stop()
-        runner.close()  # an unconfirmed video clip is discarded
-        stream.close()
-        if not stopped:
-            worker.stop(timeout=2.0)
-        cv2.destroyAllWindows()
-    return runner.saved
+    return run_window(runner, stream, lambda r: draw_demo(r, view), paced=source == "fake")
 
 
 def main(argv=None) -> int:
@@ -269,6 +122,7 @@ def main(argv=None) -> int:
     src.add_argument("--video", type=Path)
     src.add_argument("--camera", type=int)
     ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
+    ap.add_argument("--view", choices=["camera", "stick", "neutral"], default="camera")
     ap.add_argument("--device", default=default_device)
     ap.add_argument(
         "--pose-mode",
@@ -294,7 +148,9 @@ def main(argv=None) -> int:
         w = int(stream.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         h = int(stream.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
         size, source = (w, h), ("video" if args.video else "webcam")
-    saved = run_demo(stream, args.out, mode=args.mode, frame_size=size, source=source)
+    saved = run_demo(
+        stream, args.out, mode=args.mode, frame_size=size, source=source, view=args.view
+    )
     print(f"{len(saved)} tries saved in {args.out}")
     return 0
 

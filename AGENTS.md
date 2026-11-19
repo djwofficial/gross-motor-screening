@@ -66,7 +66,7 @@ leg           "L" / "R"          the SUPPORT leg (the one the child stands or ho
 ## Who owns what, and the signatures that must not change
 | Owner | Files | Interface |
 |---|---|---|
-| Daryn | `common/format.py`, `common/body25.py`, `common/geometry.py`, `app/main.py`, `rescore.py`, `model/train_rf.py`, `model/predict.py`, `models/`, tests, CI | `Try`, `validate`, `save`, `load`, `make_fake_try(task, leg, ...)`; `torso_length(points)`, `normalize(points)`; `predict(task, clues) -> (score 0/1/2, confidence 0..1)`; model file `models/task{n}_rf.joblib` = `{"model", "features"}` (`duration_s` is not a model feature) |
+| Daryn | `common/format.py`, `common/body25.py`, `common/geometry.py`, `app/main.py`, `app/screen.py`, `rescore.py`, `model/train_rf.py`, `model/predict.py`, `models/`, tests, CI | `Try`, `validate`, `save`, `load`, `make_fake_try(task, leg, ...)`; `torso_length(points)`, `normalize(points)`; `predict(task, clues) -> (score 0/1/2, confidence 0..1)`; model file `models/task{n}_rf.joblib` = `{"model", "features"}` (`duration_s` is not a model feature) |
 | Marty | `data/load_b.py`, `common/pick.py`, `model/baseline.py`, `model/task_classifier.py` | `pick_child(frames: list[(P,25,3)]) -> (T,25,3)`; `predict_task(points, t) -> (task 1/2/3, leg "L"/"R", confidence)` |
 | Louise | `features/clues.py` (tasks 1 and 2), `eval/report.py` | `timeline(task, points, t) -> list[{"start_s", "end_s", "state"}]`; `compute(task, points, t) -> dict` with exactly `CLUE_NAMES[task]`; `explain(task, clues, events=None) -> str` |
 | Revallo | `live/pose.py`, `live/convert.py`, `live/capture.py`, `live/bench_fps.py`, `features/clues.py` (task 3, in its own functions) | `PoseStream(source, mode, device).read() -> (t, keypoints (P,26,2), scores (P,26), frame)` or `None`; `halpe_to_body25(keypoints, scores) -> (...,25,3)`; `HALPE_TO_BODY25` |
@@ -84,6 +84,9 @@ window (`0 Bad / 1 Good / 2 Perfect`):
 - Mac: `python -m app.ui --camera 0 --device cpu --pose-mode lightweight --show-score` (or `python -m app.demo`)
 - Windows + NVIDIA: `python -m app.ui --camera 0 --device cuda --show-score` (or `python -m app.demo`)
 (and allow overriding flags if someone asks to change mode/camera/view).
+Double-click instead: `Open GUI.command` (Mac) or `Open GUI.bat` (Windows + NVIDIA) in the repo root.
+Both windows (testing mode and `--show-score`) are drawn by `app/screen.py`: same look, every key is
+also a clickable button. Testing mode never draws a score (`tests/test_app_screen.py`).
 
 ## How to work
 - You may commit and push directly to `main` (`git pull --rebase origin main` first), or use a
@@ -98,7 +101,7 @@ window (`0 Bad / 1 Good / 2 Perfect`):
 - Task cards: `docs/task_cards/`. Template: `docs/task_card_template.md`.
 
 ## Versions (requirements.txt, checked on PyPI 2026-11-08)
-Python 3.12 · numpy 2.5.4 · pandas 3.1.1 · scikit-learn 1.9.1 · joblib 1.6.0 · matplotlib 3.11.2 ·
+Python 3.12 · numpy 2.5.4 · pandas 3.1.1 · scikit-learn 1.9.1 · joblib 1.6.0 · matplotlib 3.11.2 · pillow 13.0.0 ·
 opencv-contrib-python 5.0.0.93 · rtmlib 0.0.16 (installed with `--no-deps`) · onnxruntime 1.31.1
 (Mac) / onnxruntime-gpu[cuda,cudnn] 1.31.1 (Windows + NVIDIA, CUDA 13) · pytest 9.2.0 · ruff 0.17.4.
 rtmlib `BodyWithFeet(mode="balanced")` = YOLOX-m detector + RTMPose-m Halpe-26 (256x192);

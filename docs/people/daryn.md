@@ -4,7 +4,7 @@
 passing the Nov 19 gate, joining the parts in `app/main.py`, `rescore.py`, the code freeze. You also
 review changes to shared files.
 
-**Your files:** `common/format.py`, `common/body25.py`, `common/geometry.py`, `app/main.py`,
+**Your files:** `common/format.py`, `common/body25.py`, `common/geometry.py`, `app/main.py`, `app/screen.py`,
 `rescore.py`, `model/train_rf.py`, `model/predict.py`, `models/`, `tests/`, `.github/`,
 `requirements*.txt`, `AGENTS.md`, `docs/`.
 

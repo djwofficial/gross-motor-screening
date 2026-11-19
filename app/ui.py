@@ -3,6 +3,8 @@ mode, #42 crash-safe).
 
 One OpenCV window on the live laptop (no installer, web or phone app). Testing mode only: the
 screen NEVER shows a score or the timeline (the screen faces the child; KEE scores on paper).
+The picture and the window loop are app.screen (Daryn), shared with app.demo (--show-score):
+same look, and every key is also a button you can click.
 
     python -m app.ui --fake                    # fake tries in a loop (no webcam, no GPU)
     python -m app.ui --fake --mode manual      # Space starts and stops each try
@@ -535,16 +537,6 @@ class Runner:
 
 # ---------------------------------------------------------------------- drawing
 
-SCREEN_W, SCREEN_H, STATUS_H = 1280, 720, 150
-STATE_COLOURS = {
-    "setup": (160, 160, 160),
-    "readiness": (0, 200, 255),
-    "idle": (200, 200, 200),
-    "ready": (80, 220, 80),
-    "recording": (60, 60, 240),
-    "confirm": (255, 180, 60),
-}
-
 
 def status_lines(c: Controller) -> list[str]:
     """Plain-language lines for the status bar. Built only from Controller, which holds no score."""
@@ -595,48 +587,13 @@ def big_lines(c: Controller) -> list[str]:
 
 
 def draw_screen(runner: Runner, view: str = "stick"):
-    """The window picture. view: stick (mirrored stick figure), camera (mirrored picture),
+    """The window picture in testing mode (app.screen.render with show_score=False: no score).
+
+    view: stick (mirrored stick figure), camera (mirrored picture with the stick figure),
     neutral (no person shown). Pose detection always ran on the unmirrored picture."""
-    import cv2
+    from app.screen import render
 
-    from viz.replay import draw_figure
-
-    c = runner.ctrl
-    img = np.full((SCREEN_H + STATUS_H, SCREEN_W, 3), 25, dtype=np.uint8)
-    area = img[:SCREEN_H]
-    fw, fh = runner.frame_size
-    if view == "camera" and runner.last_frame is not None:
-        area[:] = cv2.resize(cv2.flip(runner.last_frame, 1), (SCREEN_W, SCREEN_H))
-    elif view == "neutral":
-        area[:] = (60, 50, 40)
-    elif runner.last_points is not None:
-        pts = runner.last_points.copy()
-        pts[:, 0] = np.where(pts[:, 2] > 0, fw - pts[:, 0], 0)  # mirror for display only
-        s = min(SCREEN_W / fw, SCREEN_H / fh)
-        draw_figure(area, pts, s, (SCREEN_W - fw * s) / 2, (SCREEN_H - fh * s) / 2, labels=False)
-    colour = STATE_COLOURS.get(c.state, (200, 200, 200))
-    cv2.rectangle(img, (0, 0), (SCREEN_W - 1, SCREEN_H - 1), colour, 6)
-
-    y = 80
-    for i, line in enumerate(big_lines(c)):
-        size = 1.3 if i == 0 else 0.9
-        cv2.putText(img, line, (40, y), cv2.FONT_HERSHEY_SIMPLEX, size, (0, 0, 0), 6, cv2.LINE_AA)
-        cv2.putText(img, line, (40, y), cv2.FONT_HERSHEY_SIMPLEX, size, colour, 2, cv2.LINE_AA)
-        y += 55 if i == 0 else 42
-    y = SCREEN_H + 26
-    for i, line in enumerate(status_lines(c)):
-        cv2.putText(
-            img,
-            line[:140],
-            (12, y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            colour if i == 0 else (230, 230, 230),
-            1,
-            cv2.LINE_AA,
-        )
-        y += 27
-    return img
+    return render(runner, view, show_score=False).img
 
 
 # ---------------------------------------------------------------------- streams and window
@@ -733,38 +690,14 @@ class PoseWorker:
 def run_gui(stream, out_dir, mode="auto", view="stick", frame_size=(1280, 720), source="fake"):
     """Open the window and run until Q. Every try is saved the moment Enter is pressed.
 
-    Pose detection runs in a PoseWorker thread; this loop feeds every new frame to the Runner
-    (in order), then draws once and checks the keys.
+    The window loop is app.screen.run_window (shared with app.demo): pose detection runs in a
+    PoseWorker thread; the loop feeds every new frame to the Runner (in order), draws once, then
+    handles the keys and the clicked buttons.
     """
-    import cv2
+    from app.screen import run_window
 
     runner = Runner(out_dir, mode=mode, frame_size=frame_size, source=source)
-    name = "Gross motor screening (screening aid, not a diagnosis)"
-    cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-    worker = PoseWorker(stream, paced=source == "fake")
-    try:
-        while not runner.quit:
-            for item in worker.take(wait_s=0.005):  # short wait: no busy loop when idle
-                runner.feed(item)
-            if worker.error is not None:  # e.g. no camera frame for 5 s (PoseStream closes)
-                runner.ctrl.message = (
-                    f"Camera stopped ({worker.error}). Earlier tries are saved. Backspace if a "
-                    "try is open, then Q; check the camera and restart with the same child code."
-                )
-            elif worker.ended and worker.items.empty():
-                runner.ctrl.message = "The video ended. Press Q to quit."
-            cv2.imshow(name, draw_screen(runner, view))
-            runner.press(key_name(cv2.waitKeyEx(1)))
-            if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
-                break
-    finally:
-        stopped = worker.stop()
-        runner.close()
-        stream.close()  # also wakes a camera read that is still waiting
-        if not stopped:
-            worker.stop(timeout=2.0)
-        cv2.destroyAllWindows()
-    return runner.saved
+    return run_window(runner, stream, lambda r: draw_screen(r, view), paced=source == "fake")
 
 
 def main(argv=None) -> int:
@@ -774,7 +707,12 @@ def main(argv=None) -> int:
     src.add_argument("--video", type=Path, help="a recorded clip (needs rtmlib)")
     src.add_argument("--camera", type=int, help="webcam index (needs rtmlib)")
     ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
-    ap.add_argument("--view", choices=["stick", "camera", "neutral"], default="stick")
+    ap.add_argument(
+        "--view",
+        choices=["stick", "camera", "neutral"],
+        default=None,
+        help="default: stick, or camera with --show-score",
+    )
     ap.add_argument("--device", default="cuda", help="cuda or cpu (rtmlib)")
     ap.add_argument(
         "--pose-mode",
@@ -806,10 +744,22 @@ def main(argv=None) -> int:
     if args.show_score:
         from app.demo import run_demo
 
-        saved = run_demo(stream, args.out, mode=args.mode, frame_size=size, source=source)
+        saved = run_demo(
+            stream,
+            args.out,
+            mode=args.mode,
+            frame_size=size,
+            source=source,
+            view=args.view or "camera",
+        )
     else:
         saved = run_gui(
-            stream, args.out, mode=args.mode, view=args.view, frame_size=size, source=source
+            stream,
+            args.out,
+            mode=args.mode,
+            view=args.view or "stick",
+            frame_size=size,
+            source=source,
         )
     print(f"{len(saved)} tries saved in {args.out}")
     return 0

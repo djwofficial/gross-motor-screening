@@ -10,6 +10,7 @@ import textwrap
 
 import pytest
 
+from app import screen
 from app.session import LOG_FIELDS, load_record
 from app.ui import (
     Controller,
@@ -236,7 +237,8 @@ def test_screen_never_shows_a_score_or_timeline(tmp_path):
         r.press("ENTER", clock())
         texts += status_lines(r.ctrl) + big_lines(r.ctrl)
         img = draw_screen(r, "stick")
-        assert img.shape[:2] == (720 + 150, 1280)
+        assert img.shape[:2] == (screen.H, screen.W)
+        texts += screen.render(r, "stick", show_score=False).texts  # what the window really drew
     joined = " ".join(texts).lower()
     for word in ("score", "bad", "good", "perfect", "check by teacher", "timeline", "steady"):
         assert word not in joined, word
