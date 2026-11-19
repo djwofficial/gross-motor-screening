@@ -1,0 +1,17 @@
+clip,task,label,camera,video,seconds_on_one_foot,foot_down_s,touchdowns,hops,jumps,feet_together_takeoff,feet_together_landing,counted_by,notes
+B040_GMS_1_4_1,1,Bad,1,bad_slow_cam2_B040_GMS_1_4.mp4,0,,,,,,,Louise 2026-11-19,hard to judge from the front; cam 2/3 views are easier
+B249_GMS_1_1_1,1,Good,1,good_B249_GMS_1_1_1.mp4,2.3,,,,,,,Louise 2026-11-19,
+B210_GMS_1_5_1,1,Perfect,1,perfect_B210_GMS_1_5_1.mp4,4,,,,,,,Louise 2026-11-19,
+B210_GMS_2_2_2,2,Bad,2,hop_bad_slow_B210_GMS_2_2_2.mp4,,,,0,,,,Louise 2026-11-19,
+B209_GMS_2_2_2,2,Good,2,hop_good_slow_B209_GMS_2_2_2.mp4,,,,2,,,,Louise 2026-11-19,hops counted without the touch-down
+B054_GMS_2_1_2,2,Perfect,2,hop_perfect_slow_B054_GMS_2_1_2.mp4,,,,10,,,,Louise 2026-11-19,hops counted without the touch-down
+B174_GMS_3_3_2,3,Bad,2,jump_bad_slow_B174_GMS_3_3_2.mp4,,,,,2,yes,yes,Louise 2026-11-19,
+B021_GMS_3_5_2,3,Good,2,jump_good_option1_slow_B021_GMS_3_5_2.mp4,,,,,1,yes,yes,Louise 2026-11-19,replaces B222_GMS_3_1_2 and B029_GMS_3_1_2 (child fell in both)
+B197_GMS_3_2_2,3,Perfect,2,jump_perfect_slow_B197_GMS_3_2_2.mp4,,,,,1,yes,yes,Louise 2026-11-19,
+B013_GMS_3_3_2,3,Good,2,jump_good_option2_slow_B013_GMS_3_3_2.mp4,,,,,1,yes,yes,Louise 2026-11-19,extra clip (not one of the 9)
+B176_GMS_3_1_2,3,Good,2,jump_good_option3_slow_B176_GMS_3_1_2.mp4,,,,,1,yes,yes,Louise 2026-11-19,extra clip (not one of the 9)
+B092_GMS_2_2_2,2,Bad,2,hopbad1_slow_B092_GMS_2_2_2.mp4,,,1+,0,,,,Louise 2026-11-19,"extra Bad hop clip, counted without the timeline bar"
+B198_GMS_2_1_2,2,Bad,2,hopbad2_slow_B198_GMS_2_1_2.mp4,,,0,0,,,,Louise 2026-11-19,"extra Bad hop clip, counted without the timeline bar"
+B213_GMS_2_5_2,2,Bad,2,hopbad3_slow_B213_GMS_2_5_2.mp4,,,0,1,,,,Louise 2026-11-19,"extra Bad hop clip, counted without the timeline bar"
+B307_GMS_2_5_2,2,Bad,2,hopbad4_slow_B307_GMS_2_5_2.mp4,,,1+,1,,,,Louise 2026-11-19,"extra Bad hop clip, counted without the timeline bar"
+B088_GMS_2_3_2,2,Bad,2,hopbad5_slow_B088_GMS_2_3_2.mp4,,,,,,,,,"extra Bad hop clip, counted without the timeline bar; not counted yet"

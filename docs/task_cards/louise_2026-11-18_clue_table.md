@@ -27,6 +27,10 @@ Evidence (2026-11-19, `main` at 28d5f85 plus the header-note fix):
   was chosen by the temporary picker in `scripts/make_clue_table.py` (nearest the centre, then
   nearest neck). **Re-run the table when Marty's `pick_child` (#16) lands.**
 
+**Update 2026-11-19 (later):** Daryn switched the script to Marty's `pick_child` (fc7d33a), so
+`picked` is now `single` (2,413) or `pick_child` (943). Re-run on that version: still 3,356 rows;
+random forest macro-F1 / kappa 0.62 / 0.58 (task 1), 0.60 / 0.59 (task 2), 0.36 / 0.19 (task 3).
+
 ## Random forest gate (`python -m model.train_rf --table runs/clue_table.csv --task N`)
 
 GroupKFold(5) by child, child leak check PASS for all three.
