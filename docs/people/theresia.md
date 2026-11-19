@@ -23,7 +23,7 @@ The current `Segmenter` is a working placeholder (finds 18/18 fake tries); tune 
 **Who waits for you:** Louise (by-eye sheet Nov 11), Revallo and Louise (team clips Nov 13), Freya
 (readiness and start/end for the GUI), KEE (20 practice clips Nov 19), Daryn (dry-run count Nov 25).
 
-## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); push directly to `main` or open a PR with `Closes #<issue>` to close the task)
 | Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
 | Nov 8 | Milestone 1 | Easy | Same first line | #45 |

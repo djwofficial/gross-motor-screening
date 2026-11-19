@@ -672,9 +672,20 @@ def run_gui(stream, out_dir, mode="auto", view="stick", frame_size=(1280, 720), 
     paced = source == "fake"
     t_start, t_first = time.monotonic(), None
     try:
+        camera_error = None
         while not runner.quit:
-            item = stream.read()
-            if item is None:
+            item = None
+            if camera_error is None:
+                try:
+                    item = stream.read()
+                except OSError as e:  # e.g. no camera frame for 5 s (PoseStream closes itself)
+                    camera_error = (
+                        f"Camera stopped ({e}). Earlier tries are saved. Backspace if a try "
+                        "is open, then Q; check the camera and restart with the same child code."
+                    )
+            if camera_error is not None:
+                runner.ctrl.message = camera_error
+            elif item is None:
                 runner.ctrl.message = "The video ended. Press Q to quit."
             else:
                 runner.feed(item)
@@ -710,6 +721,12 @@ def main(argv=None) -> int:
         help="rtmlib model size; the plan uses balanced, lightweight is faster on a CPU",
     )
     ap.add_argument("--out", type=Path, default=Path("runs") / date.today().isoformat())
+    ap.add_argument(
+        "--show-score",
+        action="store_true",
+        help="camera picture with points, live score while recording, summary after Enter "
+        "(app.demo); without it the screen shows no score",
+    )
     args = ap.parse_args(argv)
 
     if args.fake:
@@ -724,9 +741,14 @@ def main(argv=None) -> int:
         w = int(stream.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         h = int(stream.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
         size, source = (w, h), ("video" if args.video else "webcam")
-    saved = run_gui(
-        stream, args.out, mode=args.mode, view=args.view, frame_size=size, source=source
-    )
+    if args.show_score:
+        from app.demo import run_demo
+
+        saved = run_demo(stream, args.out, mode=args.mode, frame_size=size, source=source)
+    else:
+        saved = run_gui(
+            stream, args.out, mode=args.mode, view=args.view, frame_size=size, source=source
+        )
     print(f"{len(saved)} tries saved in {args.out}")
     return 0
 

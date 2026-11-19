@@ -17,7 +17,7 @@ Nov 22. After Nov 19 keep your time for integration.
 **Admin still open:** `docs/admin.md` (invite the 5 teammates, CODEOWNERS usernames,
 branch protection after GitHub Student Pack).
 
-## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); push directly to `main` or open a PR with `Closes #<issue>` to close the task)
 | Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
 | Nov 8 | GitHub repo (private), folder layout, requirements.txt with exact versions (rtmlib, onnxruntime-gpu, numpy, pandas, scikit-learn, opencv), README with install steps, plus scripts/summarize_group_B.py for Milestone 1 | Easy | A teammate clones, installs and gets the Milestone 1 first line without asking anything | #1 |

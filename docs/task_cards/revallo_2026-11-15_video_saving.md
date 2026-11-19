@@ -38,6 +38,29 @@ timeout are implementation choices. The queue drops incoming frames
 when full to bound memory and keep encoding off the producer thread.
 An AVI clip uses the configured playback FPS. Its timing can differ
 from the attempt if frames drop or arrive unevenly. Use Try timestamps
-for movement analysis. Actual live FPS with V on and off remains pending.
+for movement analysis.
+
+**Live FPS with V off and on, measured 2026-11-19.** Laptop: Revallo's
+(NVIDIA GeForce RTX 3050 Laptop GPU, driver 610.62), not Freya's live laptop.
+Camera: built-in ACER HD User Facing at 1280x720. rtmlib BodyWithFeet balanced
+on CUDA, manual mode, camera view, the real app window from #66 (ae3a711).
+Both runs used `python -m live.measure_video_fps` (branch
+revallo/measure-video-fps): same scene, light and movement (one adult team
+member: one-leg stands, hops, jumps), setup T1 / 45 / consent 3, about 25 s
+per try.
+
+| Run | Frames / duration_s (log.csv) | Pose fps | Recorder offered / written / dropped | AVI |
+|---|---|---|---|---|
+| V off | 346 / 25.49 s | 13.6 | (V off: nothing written) | none |
+| V on | 325 / 25.41 s | 12.8 | 318 / 318 / 0 | opens, 318 frames read back, playback 13.0 fps |
+
+The writer dropped no frames and the clip opens. Done when (V on at 15 fps or
+more) is **not met**: 12.8 fps with V on. V off is also below 15 (13.6), so
+most of the gap comes from pose estimation plus the window on this laptop;
+video saving costs about 0.8 fps here. The 7 frames between 325 and 318 are
+the pre-roll, which holds points only. Freya and Daryn are told; fallbacks
+in the plan: a lower saved-video resolution or `--pose-mode lightweight`, and
+the same check on Freya's live laptop. The run folder was deleted after the
+numbers were copied.
 The writer uses the existing
 [OpenCV VideoWriter interface](https://docs.opencv.org/4.x/dd/d9e/classcv_1_1VideoWriter.html).

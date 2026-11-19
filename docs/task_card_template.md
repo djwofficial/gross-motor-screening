@@ -1,6 +1,6 @@
 # Task card: <owner>, <due date>: <short title>
 
-Paste this whole card into your AI tool together with AGENTS.md. One card = one branch = one PR.
+Paste this whole card into your AI tool together with AGENTS.md. You can commit and push directly to `main` (or use a branch/PR) with `Closes #<issue>`.
 
 **Goal:** what this task gives the team, in one or two sentences.
 
@@ -14,7 +14,7 @@ Paste this whole card into your AI tool together with AGENTS.md. One card = one 
 1. ...
 2. ...
 
-**Done when:** the check from the plan (a number, a plot, a test). Paste the evidence in the PR.
+**Done when:** the check from the plan (a number, a plot, a test). Paste the evidence in this card and commit/push to `main` with `Closes #<issue>`.
 
 **Watch out:** known traps (left/right, units, 28% multi-person files, ...).
 

@@ -20,7 +20,7 @@ Not yours: `model/train_rf.py`, `model/predict.py`, `models/` (Daryn).
 **Who waits for you:** Louise and Daryn (loader, Nov 11), Revallo (`pick_child`, Nov 15),
 Freya and Daryn (`predict_task`).
 
-## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); push directly to `main` or open a PR with `Closes #<issue>` to close the task)
 | Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
 | Nov 8 | Milestone 1 | Easy | First output line: files: 4661 \| children: 106 \| attempts: 1555 | #13 |
