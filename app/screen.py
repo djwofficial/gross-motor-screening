@@ -392,6 +392,7 @@ class Button:
     y: int = 0
     w: int = 0
     h: int = 0
+    pad: int = 16  # inside left edge; buttons() makes it smaller when the bar is tight
 
     def contains(self, px, py) -> bool:
         return (
@@ -403,17 +404,48 @@ class Button:
 
 _LABEL = (15, "semibold")
 _CAP = (12, "medium")
+_GROUP_GAP = 24  # least space between the left and the right group of the bar
+
+
+def _cap_gap(pad: int) -> int:
+    """Space before and after the key cap: 10 px at the full 16 px pad."""
+    return round(pad * 10 / 16)
 
 
 def _width(btn: Button) -> int:
     if btn.kind == "label":
         return math.ceil(measure(btn.label, 14, "medium"))
-    w = 16 + measure(btn.label, *_LABEL) + 16
+    p = btn.pad
+    w = p + measure(btn.label, *_LABEL) + p
     if btn.dot:
         w += 14
-    if btn.cap:  # label, 10 px, key cap, 10 px (see _draw_button)
-        w += 10 + measure(btn.cap, *_CAP) + 14 + 10 - 16
+    if btn.cap:  # label, gap, key cap, gap (see _draw_button)
+        w += _cap_gap(p) + measure(btn.cap, *_CAP) + 14 + _cap_gap(p) - p
     return math.ceil(w)
+
+
+def _place(left: list[Button], right: list[Button], pad: int) -> bool:
+    """Lay out the left group from the left edge and the right group from the right edge.
+    True if both fit with at least _GROUP_GAP between them."""
+    x = VX
+    for btn in left:
+        if btn.kind == "gap":
+            x += 14
+            continue
+        btn.pad = pad
+        btn.x, btn.y, btn.w, btn.h = x, BAR_Y, _width(btn), BAR_H
+        x += btn.w + (10 if btn.kind == "label" else 6)
+    x = VX + VW
+    for btn in reversed(right):
+        btn.pad = pad
+        btn.w, btn.y, btn.h = _width(btn), BAR_Y, BAR_H
+        btn.x = x - btn.w
+        x = btn.x - 10
+    shown = [b for b in left if b.kind != "gap"]
+    left_end = max((b.x + b.w for b in shown), default=VX)
+    right_start = min((b.x for b in right), default=VX + VW)
+    gap = _GROUP_GAP if shown and right else 0
+    return left_end + gap <= right_start
 
 
 def buttons(runner) -> list[Button]:
@@ -466,18 +498,10 @@ def buttons(runner) -> list[Button]:
                 Button("BACKSPACE", "Cancel", "Backspace"),
                 Button("ENTER", "Save", "Enter", "primary"),
             ]
-    x = VX
-    for btn in left:
-        if btn.kind == "gap":
-            x += 14
-            continue
-        btn.x, btn.y, btn.w, btn.h = x, BAR_Y, _width(btn), BAR_H
-        x += btn.w + (10 if btn.kind == "label" else 6)
-    x = VX + VW
-    for btn in reversed(right):
-        btn.w, btn.y, btn.h = _width(btn), BAR_Y, BAR_H
-        btn.x = x - btn.w
-        x = btn.x - 10
+    # Wider system fonts (DejaVu Sans on Linux) need tighter buttons to fit the same bar.
+    for pad in (16, 14, 12, 10, 8):
+        if _place(left, right, pad):
+            break
     return [btn for btn in left + right if btn.kind != "gap"]
 
 
@@ -499,14 +523,14 @@ def _draw_button(cv: Canvas, btn: Button, hovered: bool) -> None:
     if hovered:
         fill = _lighten(fill)
     cv.rrect(btn.x, btn.y, btn.w, btn.h, 10, fill=fill, border=None if filled else LINE)
-    x = btn.x + 16
+    x = btn.x + btn.pad
     if btn.dot:
         cv.dot(x + 4, cy, 4, btn.dot)
         x += 14
     cv.text(x, cy, btn.label, *_LABEL, colour=TEXT, anchor="lm")
     if btn.cap:
         kw = measure(btn.cap, *_CAP) + 14
-        kx = btn.x + btn.w - 10 - kw
+        kx = btn.x + btn.w - _cap_gap(btn.pad) - kw
         cv.rrect(kx, cy - 11, kw, 22, 6, fill=(0, 0, 0), alpha=0.22, border=TEXT, border_alpha=0.22)
         cv.text(kx + kw / 2, cy, btn.cap, *_CAP, colour=TEXT, anchor="cm", alpha=0.85)
 
