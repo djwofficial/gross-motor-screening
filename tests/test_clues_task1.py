@@ -93,3 +93,22 @@ def test_small_gap_like_a_step_is_not_a_lift():
     p, t = _both_feet(4.0)
     c = compute(1, _lift(p, t, 1.0, 3.0, px=0.2 * 110.0), t)
     assert c["one_foot_s"] == 0.0
+
+
+def test_explain_names_moments():
+    from features.clues import explain
+
+    p, t = _both_feet(4.0)
+    p = _lift(p, t, 1.0, 3.0)
+    text = explain(1, compute(1, p, t), timeline(1, p, t))
+    assert "2.0 s on one foot" in text and "0 touch-downs" in text
+    assert "foot up at 1.0 s" in text and "foot down at 3.0 s" in text
+
+
+def test_explain_without_a_lift_is_neutral():
+    from features.clues import explain
+
+    p, t = _both_feet()
+    text = explain(1, compute(1, p, t), timeline(1, p, t))
+    assert text == "no clear one-foot stand seen"
+    assert "fail" not in text

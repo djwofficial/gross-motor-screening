@@ -272,11 +272,51 @@ def compute(task: int, points: np.ndarray, t: np.ndarray) -> dict[str, float]:
     return out
 
 
+MAX_MOMENTS = 4  # moments named in one reason text; the full timeline is in the try's JSON
+
+
+def _plural(n: float, word: str) -> str:
+    n = int(round(n))
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _moments_task1(events: list[dict]) -> list[str]:
+    """'foot up at 0.8 s', 'wobble at 1.4 s', 'foot down at 3.1 s', in time order."""
+    out = []
+    prev = None
+    for e in events:
+        s = e["state"]
+        if s in _ON_ONE_FOOT and prev not in _ON_ONE_FOOT:
+            extra = " with a wobble" if s == _WOBBLE else ""
+            out.append(f"foot up at {e['start_s']:.1f} s{extra}")
+        elif s == _WOBBLE and prev != _WOBBLE:
+            out.append(f"wobble at {e['start_s']:.1f} s")
+        if s == _BOTH and prev in _ON_ONE_FOOT:
+            out.append(f"foot down at {e['start_s']:.1f} s")
+        prev = s
+    return out
+
+
+def _explain_task1(c: dict[str, float], events: list[dict] | None) -> str:
+    """Says what was measured, never that the child failed (team rule)."""
+    if c["one_foot_s"] <= 0:
+        parts = ["no clear one-foot stand seen"]
+    else:
+        parts = [f"{c['one_foot_s']:.1f} s on one foot", _plural(c["touchdowns"], "touch-down")]
+        if c["wobble_s"] > 0:
+            parts.append(f"{c['wobble_s']:.1f} s wobbling")
+    if events:
+        moments = _moments_task1(events)
+        if len(moments) > MAX_MOMENTS:
+            moments = moments[:MAX_MOMENTS] + ["..."]
+        parts += moments
+    return ", ".join(parts)
+
+
 def explain(task: int, clues: dict[str, float], events: list[dict] | None = None) -> str:
-    # TODO Louise, Nov 19: use events to name moments ("foot down at 2.0 s").
     c = clues
     if task == 1:
-        return f"{c['one_foot_s']:.1f} s on one foot, {c['touchdowns']:.0f} touch-downs, sway {c['sway']:.2f}"
+        return _explain_task1(c, events)
     if task == 2:
         return f"{c['hops']:.0f} hops, longest pause {c['longest_pause_s']:.1f} s, {c['touchdowns']:.0f} touch-downs"
     if task == 3:
