@@ -33,7 +33,9 @@ tries that automatic mode caught decides the mode for Nov 29 (Theresia, #53).
    says → Enter.
 3. Order for every performer: task 1 ×3, task 2 ×3, task 3 ×3. Alternate legs in tasks 1 and 2
    (L, R, L). Before each try press the task key (1/2/3) and the leg key so the confirm step
-   starts from the right answer.
+   starts from the right answer. Each try: stand still about 2 s before and about 2 s after
+   the movement (the 27 team clips from Nov 15 ended right after the movement, so automatic
+   mode found the end in only 1 of 27).
 4. Automatic mode: wait for READY, the performer moves, the app ends the try. At the confirm
    step check the task and leg, then Enter. If automatic mode misses a try: Space to start and
    stop by hand, and write it on the notes sheet.
@@ -44,8 +46,8 @@ tries that automatic mode caught decides the mode for Nov 29 (Theresia, #53).
    code: earlier tries must still be there and numbering must continue.
 
 ## Notes sheet (one row per try)
-| Performer | Task | Try | Leg | Auto start OK | Auto end OK | Manual used | Paper score | Notes |
-|---|---|---|---|---|---|---|---|---|
+Print `docs/testing_day/dry_run_notes_sheet.md` (27 rows filled in, plus the on-purpose tests)
+and `docs/testing_day/operator_card.md` (screens, keys, what to do when something goes wrong).
 
 ## Done when
 - [ ] 27 JSON files and 27 rows in `log.csv` (cancelled tries not counted).
