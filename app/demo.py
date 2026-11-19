@@ -246,6 +246,7 @@ def run_demo(stream, out_dir, mode="manual", frame_size=(1280, 720), source="fak
             if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
+        runner.close()  # an unconfirmed video clip is discarded
         stream.close()
         cv2.destroyAllWindows()
     return runner.saved
