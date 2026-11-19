@@ -29,8 +29,8 @@ duration_s: live, the length of a try is set by our automatic start and end, so 
 not learn from it. Adding or renaming a clue is fine, but tell Daryn and Marty and update
 CLUE_NAMES in the same PR.
 
-STUB: only duration_s is real; the other values are 0.0 and the timeline is one UNKNOWN block
-until the real versions land (task 1 by Nov 14, tasks 2-3 by Nov 17, explain by Nov 19). Ideas
+Task 1 is real (Louise, #20). STUB for tasks 2-3: only duration_s is real; the other values are
+0.0 and the timeline is one UNKNOWN block until they land (tasks 2-3 by Nov 17, explain by Nov 19). Ideas
 per clue: Job Card 2 in the team Google Doc.
 """
 
@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from common import body25 as b
 from common.geometry import normalize
 
 CLUE_NAMES = {
@@ -54,19 +55,220 @@ STATES = {
 }
 
 
+# --- Task 1 (stand on one leg), Louise -------------------------------------------------------
+# On one foot: the two ankles differ in height by more than ONE_FOOT_GAP torso lengths.
+# 0.15 is the start value from Job Card 2 and the 2026-11-09 rough test; tune it by eye.
+ONE_FOOT_GAP = 0.15
+# A one-foot stretch counts only if the gap reaches LIFT_PEAK somewhere inside it; otherwise it was
+# a step toward the camera (a foot closer to camera 1 sits lower in the picture), not a lift.
+# By eye 2026-11-19 (Louise): Bad clip B040_GMS_1_4_1 peaks at 0.22 and the child never stood on
+# one foot; real lifts in B249_GMS_1_1_1 and B210_GMS_1_5_1 reach 0.6-0.9.
+LIFT_PEAK = 0.3
+# Runs shorter than this are flickers and are merged into a neighbour (2026-11-09 rough test).
+MIN_RUN_S = 0.2
+# Wobble: the mid-hip moves sideways faster than WOBBLE_SPEED torso lengths per second, after
+# smoothing over SMOOTH_S. Chosen with scripts/check_clues_task1.py on 906 one-person group B
+# task 1 files (2026-11-19): at 0.25 the median wobble time is 0.40 s (Bad), 0.57 s (Good),
+# 0.00 s (Perfect); at 0.35 and 0.5 Bad and Perfect both drop to 0. Not yet checked by eye.
+WOBBLE_SPEED = 0.25
+SMOOTH_S = 0.2
+
+_BOTH, _ONE, _WOBBLE, _UNK = "both_feet", "steady", "wobble", UNKNOWN
+_ON_ONE_FOOT = (_ONE, _WOBBLE)
+
+
+def _duration(t: np.ndarray) -> float:
+    return float(t[-1] - t[0]) if len(t) > 1 else 0.0
+
+
+def _whole(t: np.ndarray, state: str = UNKNOWN) -> list[dict]:
+    return [{"start_s": float(t[0]), "end_s": float(t[-1]), "state": state}]
+
+
+def _foot_height(q: np.ndarray, ankle: int, heel: int) -> np.ndarray:
+    """Ankle height per frame (torso lengths, y up); the heel stands in when the ankle is missing."""
+    y = q[:, ankle, 1].copy()
+    miss = np.isnan(y)
+    y[miss] = q[miss, heel, 1]
+    return y
+
+
+def _fill_nan(x: np.ndarray) -> np.ndarray:
+    ok = ~np.isnan(x)
+    if not ok.any():
+        return np.zeros_like(x)
+    idx = np.arange(len(x))
+    return np.interp(idx, idx[ok], x[ok])
+
+
+def _smooth(x: np.ndarray, t: np.ndarray, window_s: float) -> np.ndarray:
+    """Moving average over a time window (works for any frame rate)."""
+    out = np.empty_like(x)
+    half = window_s / 2
+    lo = np.searchsorted(t, t - half, side="left")
+    hi = np.searchsorted(t, t + half, side="right")
+    c = np.concatenate([[0.0], np.cumsum(x)])
+    out[:] = (c[hi] - c[lo]) / np.maximum(hi - lo, 1)
+    return out
+
+
+def _runs(states: list[str]) -> list[list]:
+    """Frame states -> [[state, first_frame, last_frame], ...]."""
+    runs: list[list] = []
+    for i, s in enumerate(states):
+        if runs and runs[-1][0] == s:
+            runs[-1][2] = i
+        else:
+            runs.append([s, i, i])
+    return runs
+
+
+def _run_s(run: list, t: np.ndarray) -> float:
+    """Seconds a run lasts: from its first frame to the first frame of the next run."""
+    end = min(run[2] + 1, len(t) - 1)
+    return float(t[end] - t[run[1]])
+
+
+def _merge_short(runs: list[list], t: np.ndarray, min_s: float) -> list[list]:
+    """Merge runs shorter than min_s into their longer neighbour, shortest first."""
+    runs = [r[:] for r in runs]
+    while len(runs) > 1:
+        lengths = [_run_s(r, t) for r in runs]
+        i = int(np.argmin(lengths))
+        if lengths[i] >= min_s:
+            break
+        if i == 0:
+            j = 1
+        elif i == len(runs) - 1:
+            j = i - 1
+        else:
+            j = i - 1 if lengths[i - 1] >= lengths[i + 1] else i + 1
+        lo, hi = min(i, j), max(i, j)
+        merged = [runs[j][0], runs[lo][1], runs[hi][2]]
+        runs[lo : hi + 1] = [merged]
+        # neighbours that now share a state become one run
+        k = lo
+        if k > 0 and runs[k - 1][0] == runs[k][0]:
+            runs[k - 1 : k + 1] = [[runs[k][0], runs[k - 1][1], runs[k][2]]]
+            k -= 1
+        if k < len(runs) - 1 and runs[k + 1][0] == runs[k][0]:
+            runs[k : k + 2] = [[runs[k][0], runs[k][1], runs[k + 1][2]]]
+    return runs
+
+
+def _frame_states_task1(q: np.ndarray, t: np.ndarray) -> tuple[list[str], np.ndarray]:
+    yl = _foot_height(q, b.L_ANKLE, b.L_HEEL)
+    yr = _foot_height(q, b.R_ANKLE, b.R_HEEL)
+    gap = np.abs(yl - yr)
+    hip_x = _smooth(_fill_nan(q[:, b.MID_HIP, 0]), t, SMOOTH_S)
+    speed = np.abs(np.gradient(hip_x, t)) if len(t) > 1 else np.zeros(len(t))
+    speed = _smooth(speed, t, SMOOTH_S)
+    states = []
+    for g, v in zip(gap, speed, strict=True):
+        if np.isnan(g):
+            states.append(_UNK)
+        elif g <= ONE_FOOT_GAP:
+            states.append(_BOTH)
+        else:
+            states.append(_WOBBLE if v > WOBBLE_SPEED else _ONE)
+    return states, gap
+
+
+def _drop_low_lifts(runs: list[list], gap: np.ndarray) -> list[list]:
+    """One-foot stretches (neighbouring steady/wobble runs) whose gap never reaches LIFT_PEAK
+    become both_feet; neighbouring runs that then share a state are joined."""
+    runs = [r[:] for r in runs]
+    k = 0
+    while k < len(runs):
+        if runs[k][0] not in _ON_ONE_FOOT:
+            k += 1
+            continue
+        j = k
+        while j + 1 < len(runs) and runs[j + 1][0] in _ON_ONE_FOOT:
+            j += 1
+        peak = np.nanmax(gap[runs[k][1] : runs[j][2] + 1])
+        if not peak >= LIFT_PEAK:
+            for r in runs[k : j + 1]:
+                r[0] = _BOTH
+        k = j + 1
+    joined: list[list] = []
+    for r in runs:
+        if joined and joined[-1][0] == r[0]:
+            joined[-1][2] = r[2]
+        else:
+            joined.append(r)
+    return joined
+
+
+def _timeline_task1(points: np.ndarray, t: np.ndarray) -> list[dict]:
+    try:
+        q = normalize(points)
+    except ValueError:  # no neck/mid-hip anywhere: torso length unknown
+        return _whole(t)
+    states, gap = _frame_states_task1(q, t)
+    runs = _drop_low_lifts(_merge_short(_runs(states), t, MIN_RUN_S), gap)
+    events = []
+    for k, (state, i0, _i1) in enumerate(runs):
+        end = t[runs[k + 1][1]] if k + 1 < len(runs) else t[-1]
+        events.append({"start_s": float(t[i0]), "end_s": float(end), "state": state})
+    return events
+
+
+def _clues_task1(points: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[str, float]:
+    """Every clue comes from the timeline, except sway, which needs the hip inside the
+    longest one-foot stretch that the timeline marks."""
+    out = {name: 0.0 for name in CLUE_NAMES[1]}
+    out["duration_s"] = _duration(t)
+
+    # one-foot stretches = neighbouring steady/wobble events joined
+    stretches: list[list[float]] = []
+    prev_on = False
+    for e in events:
+        on = e["state"] in _ON_ONE_FOOT
+        if on and prev_on:
+            stretches[-1][1] = e["end_s"]
+        elif on:
+            stretches.append([e["start_s"], e["end_s"]])
+        prev_on = on
+    if not stretches:
+        return out
+
+    longest = max(stretches, key=lambda s: s[1] - s[0])
+    out["one_foot_s"] = float(longest[1] - longest[0])
+    # the lifted foot came down and went up again: both-feet events between two stretches
+    out["touchdowns"] = float(len(stretches) - 1)
+    out["wobble_s"] = float(sum(e["end_s"] - e["start_s"] for e in events if e["state"] == _WOBBLE))
+
+    q = normalize(points)
+    inside = (t >= longest[0]) & (t <= longest[1])
+    hip_x = q[inside, b.MID_HIP, 0]
+    hip_x = hip_x[~np.isnan(hip_x)]
+    if hip_x.size >= 2:
+        lo, hi = np.percentile(hip_x, [5, 95])
+        out["sway"] = float(hi - lo)
+    return out
+
+
+# --- Shared interface ------------------------------------------------------------------------
+
+
 def timeline(task: int, points: np.ndarray, t: np.ndarray) -> list[dict]:
     if task not in CLUE_NAMES:
         raise ValueError("task must be 1, 2 or 3")
+    if task == 1:
+        return _timeline_task1(points, t)
     _ = normalize(points)  # torso lengths, y up; the owners build the moments from this
-    return [{"start_s": float(t[0]), "end_s": float(t[-1]), "state": UNKNOWN}]
+    return _whole(t)
 
 
 def compute(task: int, points: np.ndarray, t: np.ndarray) -> dict[str, float]:
     if task not in CLUE_NAMES:
         raise ValueError("task must be 1, 2 or 3")
-    _ = timeline(task, points, t)  # the owners compute the clues from this
+    events = timeline(task, points, t)
+    if task == 1:
+        return _clues_task1(points, t, events)
     out = {name: 0.0 for name in CLUE_NAMES[task]}
-    out["duration_s"] = float(t[-1] - t[0]) if len(t) > 1 else 0.0
+    out["duration_s"] = _duration(t)
     return out
 
 
