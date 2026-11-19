@@ -3,7 +3,8 @@
 Saves models/task{n}_rf.joblib as {"model": fitted classifier, "features": CLUE_NAMES[n] without
 duration_s} (the format model/predict.py loads). Gate on Nov 19: macro-F1 and kappa above the
 baseline. For task 2 also try a per-second forest (one-second windows labelled with the score of
-their try, probabilities averaged over the try) and keep whichever scores higher (not here yet).
+their try, probabilities averaged over the try) and keep whichever scores higher (not tried for
+the Nov 19 gate: see docs/task_cards/daryn_2026-11-19_gate.md).
 
 Clue table (Louise, #22): a CSV with one row per dataset file and the columns
     child   e.g. "B010": the group for GroupKFold, so no child is in train and test at once
