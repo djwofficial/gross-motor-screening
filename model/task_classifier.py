@@ -247,21 +247,24 @@ def predict_task(points: np.ndarray, t: np.ndarray) -> tuple[int, str, float]:
 
 def build_group_b_clue_table(
     zip_path: str | Path = DEFAULT_ZIP,
-    task1_csv: str | Path | None = Path("runs/marty_eval/clue_table_task1.csv"),
+    task1_csv: str | Path | None = None,
 ) -> pd.DataFrame:
-    """Build the clue table across all valid Group B task 1-3 files, using the provided Task 1 CSV if available."""
+    """Build the clue table across all valid Group B task 1-3 files.
+
+    By default every clue comes from extract_task_clues (features.clues.compute), exactly like
+    the live app, so the saved model sees the same numbers in training and live. task1_csv is
+    only for experiments: if given, its Task 1 columns replace the computed ones.
+    """
     t1_map: dict[str, dict[str, float]] = {}
-    for candidate in (task1_csv, Path("/Users/dyn/Downloads/clue_table.csv")):
-        if candidate is not None and Path(candidate).exists():
-            t1_df = pd.read_csv(candidate)
-            cols = [
-                c
-                for c in ("duration_s", "one_foot_s", "touchdowns", "sway", "wobble_s")
-                if c in t1_df.columns
-            ]
-            for _, row in t1_df.iterrows():
-                t1_map[str(row["file"])] = {c: float(row[c]) for c in cols}
-            break
+    if task1_csv is not None and Path(task1_csv).exists():
+        t1_df = pd.read_csv(task1_csv)
+        cols = [
+            c
+            for c in ("duration_s", "one_foot_s", "touchdowns", "sway", "wobble_s")
+            if c in t1_df.columns
+        ]
+        for _, row in t1_df.iterrows():
+            t1_map[str(row["file"])] = {c: float(row[c]) for c in cols}
 
     rows = []
     for _name, tr in iter_tries(zip_path=zip_path, tasks=TASKS):
@@ -423,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("runs/marty_eval/task_classifier"),
         help="directory for confusion matrix CSV and PNG",
     )
+    ap.add_argument(
+        "--save",
+        action="store_true",
+        help="train on all files and save models/task_classifier.joblib",
+    )
     args = ap.parse_args(argv)
 
     if args.table:
@@ -450,6 +458,10 @@ def main(argv: list[str] | None = None) -> int:
     csv_path, png_path = save_task_confusion_matrix(res_all.matrix, args.out_dir)
     print(f"\nSaved confusion matrix CSV: {csv_path}")
     print(f"Saved confusion matrix PNG: {png_path}")
+
+    if args.save:
+        model_path = fit_and_save_task_model(table, feature_cols=avail_all)
+        print(f"Saved task model: {model_path}")
     return 0 if (res_clues.leak_free and res_all.leak_free) else 1
 
 
