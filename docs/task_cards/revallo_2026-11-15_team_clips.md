@@ -3,18 +3,20 @@
 **Issue:** [#31](https://github.com/djwofficial/gross-motor-screening/issues/31).
 **Branch:** `revallo/process-team-clips`.
 
+**Download:** [27 adult team Try files and manifest](team_clips_27_try.zip).
+
 **Goal:** Convert the team's 27 adult recordings into valid BODY_25 Try files,
 with a clear per-file manifest for handoff to Louise and Theresia.
 
 **Input -> output:** Adult team videos from the operator-provided Drive folder
--> one validated `.npz` Try per recording, plus a local aggregate report and
-handoff archive. Keep original media and generated points out of Git.
+-> one validated `.npz` Try per recording, plus an aggregate report and ZIP for
+handoff. Keep the original recordings in team storage.
 
 **Signatures (don't change):** Reuse `PoseStream`, `halpe_to_body25`,
 `pick_child`, `capture_try`, and `common.format.save/load/validate`.
 The recording pipeline is in PR #59; record its exact commit in the evidence.
 
-**Files you may change:** This task card and local ignored processing artifacts.
+**Files you may change:** This task card, its handoff ZIP, and local ignored processing artifacts.
 Fix any discovered pipeline defect on its own existing capture branch, without
 changing shared modules, contract tests, or dependency pins.
 
@@ -34,8 +36,8 @@ inferred clip is a successful real-detector result.
 
 **Watch out:** This input is adult team practice footage. Testing-day child
 videos/points are never handled in this workflow or sent to an AI. Task 1/2
-leg labels refer to the support leg. No raw media/points go in Git or PR text.
-An offline processing run does not establish Freya's live-camera FPS gate.
+leg labels refer to the support leg. Revallo authorized the derived skeleton
+ZIP for team handoff. Keep source media and testing-day data out of Git.
 
 **Tests:** Existing capture/pose contracts and behavior tests; a real input
 video must produce a file accepted by `common.format.load` and `validate`.
@@ -55,7 +57,8 @@ requested. Ten clips contain multiple detections and need person selection
 review because the shared picker takes the first detection. Five of the
 nine task 3 clips have no such flag. These are format and detection checks.
 
-The local handoff ZIP `team_clips_27_try.zip` passed its archive integrity
-check and contains the 27 validated Try files, a CSV manifest, and usage notes.
-Revallo can give that bundle to Louise and Theresia. Team media and points
-are kept in the ignored runs directory.
+The handoff ZIP passed its archive integrity check and contains the 27
+validated Try files, a CSV manifest, and usage notes. It preserves the points,
+timestamps and per-clip review flags. Local paths and Drive file IDs are
+omitted. The manifest keeps the team video folder and filename for matching
+each Try to its source.
