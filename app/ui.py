@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import argparse
 import math
+import queue
 import sys
+import threading
 import time
 from collections import deque
 from datetime import date
@@ -662,45 +664,99 @@ class FakeLoopStream:
         pass
 
 
+class PoseWorker:
+    """Runs stream.read() (camera + pose detection) in its own thread.
+
+    The window then never makes pose wait: drawing, imshow and the key check run while the next
+    frame is being detected. Every item is kept, in order (none are dropped), and handed to the
+    window with take(). An OSError from the stream (e.g. no camera frame for 5 s) is kept in
+    .error; .ended is True once the stream has no more frames. paced=True plays a fake stream
+    (which answers instantly) at the speed of its own time stamps.
+    """
+
+    def __init__(self, stream, paced: bool = False, max_items: int = 256):
+        self.stream, self.paced = stream, paced
+        self.items: queue.Queue = queue.Queue(maxsize=max_items)
+        self.error: Exception | None = None
+        self.ended = False
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="pose-worker", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        t_start, t_first = time.monotonic(), None
+        try:
+            while not self._stop.is_set():
+                item = self.stream.read()
+                if item is None:
+                    break
+                if self.paced:  # fake frames come instantly: play them in real time
+                    t_first = item[0] if t_first is None else t_first
+                    wait = (item[0] - t_first) - (time.monotonic() - t_start)
+                    if wait > 0 and self._stop.wait(wait):
+                        break
+                while not self._stop.is_set():
+                    try:
+                        self.items.put(item, timeout=0.1)  # the window takes them every loop
+                        break
+                    except queue.Full:
+                        pass
+        except OSError as e:
+            self.error = e
+        finally:
+            self.ended = True
+
+    def take(self, wait_s: float = 0.0) -> list:
+        """All items that are ready, in order; waits up to wait_s for the first one."""
+        out = []
+        try:
+            out.append(self.items.get(timeout=wait_s) if wait_s > 0 else self.items.get_nowait())
+            while True:
+                out.append(self.items.get_nowait())
+        except queue.Empty:
+            pass
+        return out
+
+    def stop(self, timeout: float = 6.0) -> bool:
+        """Ask the thread to stop; True if it did within timeout (a camera read can take 5 s)."""
+        self._stop.set()
+        self.thread.join(timeout)
+        return not self.thread.is_alive()
+
+
 def run_gui(stream, out_dir, mode="auto", view="stick", frame_size=(1280, 720), source="fake"):
-    """Open the window and run until Q. Every try is saved the moment Enter is pressed."""
+    """Open the window and run until Q. Every try is saved the moment Enter is pressed.
+
+    Pose detection runs in a PoseWorker thread; this loop feeds every new frame to the Runner
+    (in order), then draws once and checks the keys.
+    """
     import cv2
 
     runner = Runner(out_dir, mode=mode, frame_size=frame_size, source=source)
     name = "Gross motor screening (screening aid, not a diagnosis)"
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-    paced = source == "fake"
-    t_start, t_first = time.monotonic(), None
+    worker = PoseWorker(stream, paced=source == "fake")
     try:
-        camera_error = None
         while not runner.quit:
-            item = None
-            if camera_error is None:
-                try:
-                    item = stream.read()
-                except OSError as e:  # e.g. no camera frame for 5 s (PoseStream closes itself)
-                    camera_error = (
-                        f"Camera stopped ({e}). Earlier tries are saved. Backspace if a try "
-                        "is open, then Q; check the camera and restart with the same child code."
-                    )
-            if camera_error is not None:
-                runner.ctrl.message = camera_error
-            elif item is None:
-                runner.ctrl.message = "The video ended. Press Q to quit."
-            else:
+            for item in worker.take(wait_s=0.005):  # short wait: no busy loop when idle
                 runner.feed(item)
-                if paced:  # fake frames come instantly: play them in real time
-                    t_first = item[0] if t_first is None else t_first
-                    wait = (item[0] - t_first) - (time.monotonic() - t_start)
-                    if wait > 0:
-                        time.sleep(wait)
+            if worker.error is not None:  # e.g. no camera frame for 5 s (PoseStream closes)
+                runner.ctrl.message = (
+                    f"Camera stopped ({worker.error}). Earlier tries are saved. Backspace if a "
+                    "try is open, then Q; check the camera and restart with the same child code."
+                )
+            elif worker.ended and worker.items.empty():
+                runner.ctrl.message = "The video ended. Press Q to quit."
             cv2.imshow(name, draw_screen(runner, view))
             runner.press(key_name(cv2.waitKeyEx(1)))
             if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
+        stopped = worker.stop()
         runner.close()
-        stream.close()
+        stream.close()  # also wakes a camera read that is still waiting
+        if not stopped:
+            worker.stop(timeout=2.0)
         cv2.destroyAllWindows()
     return runner.saved
 
