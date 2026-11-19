@@ -49,6 +49,9 @@ The first line must be `files: 4661 | children: 106 | attempts: 1555`.
 
 ## 3. Run
 ```bash
+python -m app.demo                           # open GUI: live webcam + stick figure + live score (0 Bad / 1 Good / 2 Perfect)
+python -m app.ui --camera 0 --device cpu --pose-mode lightweight --show-score   # Mac live GUI
+python -m app.ui --camera 0 --device cuda --show-score                          # Windows + NVIDIA live GUI
 python -m app.main --fake                    # whole pipeline on a fake try (auto start/end)
 python -m app.main --fake --task 1 --mode manual
 python rescore.py runs/<date>                # scores the saved tries again; must match

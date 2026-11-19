@@ -259,20 +259,26 @@ def run_demo(stream, out_dir, mode="manual", frame_size=(1280, 720), source="fak
 
 
 def main(argv=None) -> int:
+    default_device = "cpu" if sys.platform == "darwin" else "cuda"
+    default_pose_mode = "lightweight" if sys.platform == "darwin" else "balanced"
     ap = argparse.ArgumentParser(
         description="Window with live score and summary (screening aid, not a diagnosis)"
     )
-    src = ap.add_mutually_exclusive_group(required=True)
+    src = ap.add_mutually_exclusive_group(required=False)
     src.add_argument("--fake", action="store_true")
     src.add_argument("--video", type=Path)
     src.add_argument("--camera", type=int)
-    ap.add_argument("--mode", choices=["auto", "manual"], default="manual")
-    ap.add_argument("--device", default="cuda")
+    ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
+    ap.add_argument("--device", default=default_device)
     ap.add_argument(
-        "--pose-mode", choices=["balanced", "lightweight", "performance"], default="balanced"
+        "--pose-mode",
+        choices=["balanced", "lightweight", "performance"],
+        default=default_pose_mode,
     )
     ap.add_argument("--out", type=Path, default=Path("runs") / f"demo_{date.today().isoformat()}")
     args = ap.parse_args(argv)
+    if not args.fake and args.video is None and args.camera is None:
+        args.camera = 0
 
     if args.fake:
         from app.ui import FakeLoopStream

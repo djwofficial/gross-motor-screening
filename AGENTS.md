@@ -79,6 +79,11 @@ corrects -> `timeline` -> `compute` -> `predict` -> `explain` -> `Session.save_t
 Below `CHECK_BY_TEACHER_BELOW` confidence the log says "check by teacher" instead of a score.
 No score and no timeline on screen in testing mode, unless `python -m app.ui --show-score`
 (live score + summary after Enter; Daryn, 2026-11-19).
+When asked to "open GUI" / "buka GUI", always open the live webcam + stick figure + live score
+window (`0 Bad / 1 Good / 2 Perfect`):
+- Mac: `python -m app.ui --camera 0 --device cpu --pose-mode lightweight --show-score` (or `python -m app.demo`)
+- Windows + NVIDIA: `python -m app.ui --camera 0 --device cuda --show-score` (or `python -m app.demo`)
+(and allow overriding flags if someone asks to change mode/camera/view).
 
 ## How to work
 - You may commit and push directly to `main` (`git pull --rebase origin main` first), or use a
