@@ -33,6 +33,7 @@ from sklearn.model_selection import GroupKFold
 from common import body25 as b
 from common.geometry import normalize
 from data.load_b import DEFAULT_ZIP, iter_tries
+from features.clues import compute as compute_clues
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_FILENAME = "task_classifier.joblib"
@@ -117,25 +118,17 @@ def extract_task_clues(points: np.ndarray, t: np.ndarray) -> dict[str, float]:
     ry = _interp_1d(n[:, b.R_ANKLE, 1])
     hx = _interp_1d(n[:, b.MID_HIP, 0])
     hy = _interp_1d(n[:, b.MID_HIP, 1])
-    nx = _interp_1d(n[:, b.NECK, 0])
 
     foot_diff = np.abs(ly - ry)
     up_mask = foot_diff > 0.12
-    one_foot_s = float(up_mask.sum() * dt)
+    t1_clues = compute_clues(1, points, t)
+    one_foot_s = float(t1_clues["one_foot_s"])
+    touchdowns = float(t1_clues["touchdowns"])
+    sway = float(t1_clues["sway"])
+    wobble_s = float(t1_clues["wobble_s"])
     one_foot_frac = float(up_mask.mean()) if n_frames > 0 else 0.0
     foot_diff_med = float(np.median(foot_diff)) if n_frames > 0 else 0.0
     foot_diff_p75 = float(np.percentile(foot_diff, 75)) if n_frames > 0 else 0.0
-
-    if np.any(up_mask):
-        idx_up = np.nonzero(up_mask)[0]
-        active = up_mask[idx_up[0] : idx_up[-1] + 1]
-        touchdowns = float(np.sum(active[:-1] & (~active[1:])))
-    else:
-        touchdowns = 1.0
-
-    sway = float(np.hypot(np.std(nx), np.std(hx)))
-    vx = np.abs(np.diff(nx, prepend=nx[0])) / max(dt, 1e-3)
-    wobble_s = float(np.sum(vx > 0.45) * dt)
 
     sup_y = np.minimum(ly, ry)
     sup_y_smooth = _smooth_1d(sup_y, width=5)
