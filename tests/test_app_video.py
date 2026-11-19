@@ -128,3 +128,59 @@ def test_closing_the_window_mid_try_discards_the_clip(tmp_path):
         r.feed(item)
     r.close()
     assert videos(tmp_path) == [] and not list(tmp_path.glob(".*partial*"))
+
+
+def test_camera_error_shows_a_plain_message_and_keeps_saved_tries(tmp_path, monkeypatch):
+    """PoseStream.read() raises OSError when the camera stops (e.g. no frame for 5 s)."""
+    import app.ui as ui
+
+    class DyingStream:
+        def __init__(self):
+            self.items = items_with_frames()
+            self.n = 0
+
+        def read(self):
+            self.n += 1
+            if self.n > 200:
+                raise OSError("Timed out waiting for a camera frame")
+            return next(self.items, None) or (self.n / 30 + 10, *next(items_with_frames())[1:])
+
+        def close(self):
+            pass
+
+    keys = iter(
+        [ord(c) for c in "K01"]
+        + [13]
+        + [ord(c) for c in "45"]
+        + [13, ord("3"), 13]  # setup
+        + [13]  # readiness
+        + [32]
+        + [-1] * 150
+        + [32, 13]  # one manual try, saved
+        + [-1] * 80  # the camera dies around here
+        + [ord("q")]
+    )
+    # after the planned keys: Backspace (drops an open try) then Q, at most 50 times, then stop
+    fallback = iter([8, ord("q")] * 50 + [-1] * 10_000)
+    frames = __import__("itertools").count()
+    shown = []
+    fake_cv2 = type(
+        "cv2",
+        (),
+        {
+            "WINDOW_NORMAL": 0,
+            "WND_PROP_VISIBLE": 0,
+            "namedWindow": staticmethod(lambda *a: None),
+            "imshow": staticmethod(lambda *a: None),
+            "waitKeyEx": staticmethod(lambda *a: next(keys, next(fallback))),
+            # the window "closes" after 2000 frames, so a broken test can never hang
+            "getWindowProperty": staticmethod(lambda *a: 0 if next(frames) >= 2000 else 1),
+            "destroyAllWindows": staticmethod(lambda: None),
+        },
+    )
+    monkeypatch.setitem(__import__("sys").modules, "cv2", fake_cv2)
+    monkeypatch.setattr(ui, "draw_screen", lambda r, view: shown.append(r.ctrl.message))
+    monkeypatch.setattr(ui.Controller.__init__, "__defaults__", ("auto", 0.0))  # no key debounce
+    saved = ui.run_gui(DyingStream(), tmp_path, mode="manual", frame_size=SIZE, source="webcam")
+    assert len(saved) == 1 and saved[0].exists()
+    assert any(m.startswith("Camera stopped (Timed out") for m in shown)

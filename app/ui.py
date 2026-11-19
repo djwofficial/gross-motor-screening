@@ -672,9 +672,20 @@ def run_gui(stream, out_dir, mode="auto", view="stick", frame_size=(1280, 720), 
     paced = source == "fake"
     t_start, t_first = time.monotonic(), None
     try:
+        camera_error = None
         while not runner.quit:
-            item = stream.read()
-            if item is None:
+            item = None
+            if camera_error is None:
+                try:
+                    item = stream.read()
+                except OSError as e:  # e.g. no camera frame for 5 s (PoseStream closes itself)
+                    camera_error = (
+                        f"Camera stopped ({e}). Earlier tries are saved. Backspace if a try "
+                        "is open, then Q; check the camera and restart with the same child code."
+                    )
+            if camera_error is not None:
+                runner.ctrl.message = camera_error
+            elif item is None:
                 runner.ctrl.message = "The video ended. Press Q to quit."
             else:
                 runner.feed(item)
