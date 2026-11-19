@@ -21,7 +21,8 @@ Screens (Controller.state):
                Backspace cancels the try
 
 Keys: 1/2/3 task, L/R leg, Space manual start/stop (fallback, also in automatic mode),
-Enter confirm, Backspace cancel the try, N next child, V video on/off (consent level 3 only),
+Enter confirm, Backspace cancel the try, N next child, V video on/off (consent level 3 only;
+the camera picture of each confirmed try is saved by live.video_writer),
 Q quit (Esc in the setup screen).
 
 Split: Controller = keys and states only (pure, tested without a window). Runner = the pipeline
@@ -312,6 +313,8 @@ class Runner:
         self.last_frame = None
         self.saved: list[Path] = []
         self.quit = False
+        self.recorder = None  # live.video_writer.TryVideoRecorder of the current try
+        self.video_error: str | None = None  # set for the rest of the try after a writer error
 
     # ------------------------------------------------------------- per frame
     def fps(self) -> float:
@@ -356,6 +359,7 @@ class Runner:
             c.problems = check(pts if found else None, self.fps(), self.frame_size)
         if self.buf is not None:
             self.buf.append((t, child25, raw))
+            self._offer_video(frame)
         if c.mode == "auto" and c.state in ("idle", "ready", "recording"):
             ev = self.seg.update(child25 if found else None, t)
             self._apply(c.segment(ev))
@@ -378,19 +382,69 @@ class Runner:
         self.hist.clear()
 
     def _do_video(self, on):
-        # Saving the picture itself is Revallo's task (#30); the flag goes into JSON and log.
+        # V on/off. The recorder gets the current V setting with every frame (_offer_video),
+        # so turning V off in the middle of a try stops adding frames from then on.
         if self.session is not None:
             self.session.video = bool(on)
+
+    # ------------------------------------------------------------- video (Revallo's #30)
+    def _start_video(self):
+        """One recorder per try, only when the parent ticked consent level 3."""
+        self._close_video(keep=False)  # a left-over recorder is never kept
+        self.video_error = None
+        if self.session is None or self.session.consent_level != 3:
+            return
+        from live.video_writer import TryVideoRecorder
+
+        fps = self.fps()
+        try:
+            self.recorder = TryVideoRecorder(
+                self.out_dir,
+                child=self.session.child,
+                consent_level=self.session.consent_level,
+                fps=round(fps) if fps >= 1 else 30.0,
+                frame_size=tuple(self.frame_size),
+            )
+        except ValueError as e:  # e.g. odd frame size or a child code the file name can't take
+            self.recorder, self.video_error = None, f"Video not recorded: {e}"
+
+    def _offer_video(self, frame):
+        """Send the original (unmirrored) BGR frame while the try is being recorded."""
+        if self.recorder is None or frame is None:
+            return
+        try:
+            self.recorder.offer(frame, enabled=self.ctrl.video)
+        except ValueError as e:  # the frame doesn't match the camera size given at the start
+            self._close_video(keep=False)
+            self.video_error = f"Video not recorded: {e}"
+
+    def _close_video(self, keep: bool):
+        """keep=True on Enter: publish the clip. Returns its path, or None if nothing was saved."""
+        rec, self.recorder = self.recorder, None
+        if rec is None:
+            return None
+        try:
+            return rec.close(keep=keep)
+        except (OSError, TimeoutError) as e:
+            if keep:
+                self.video_error = f"Video not saved: {e}"
+            return None
+
+    def close(self):
+        """Window closed or Q: an unconfirmed clip is discarded."""
+        self._close_video(keep=False)
 
     def _do_ready_ok(self):
         self.seg.reset()
 
     def _do_start(self, how):
-        self.buf = list(self.pre)  # keep the pre-roll before the start
+        self.buf = list(self.pre)  # keep the pre-roll before the start (points only, no video)
         self.pending = None
+        self._start_video()
 
     def _do_cancel(self):
         self.buf, self.pending = None, None
+        self._close_video(keep=False)
         self.seg.reset()
 
     def _do_stop(self):
@@ -400,6 +454,7 @@ class Runner:
         if len(buf) < 2:
             self.ctrl.state = "idle"
             self.ctrl.message = "Try too short (not saved)."
+            self._close_video(keep=False)
             self.seg.reset()
             return
         t = np.array([b[0] for b in buf], dtype=np.float64)
@@ -437,23 +492,36 @@ class Runner:
             events = timeline(task, tr.points, tr.t)
         except ValueError as e:  # e.g. no torso found in any frame
             clues, score, confidence, reasons, events = {}, 1, 0.0, f"not scored: {e}", None
-        path = self.session.save_try(
-            tr,
-            raw26=p["raw26"],
-            task=task,
-            leg=leg,
-            guessed_task=gt,
-            guessed_leg=gl,
-            task_confidence=gc,
-            corrected=corrected,
-            score=score,
-            confidence=confidence,
-            clues=clues,
-            reasons=reasons,
-            events=events,
-        )
+        # The points are saved even if the video fails; the log's video column says whether a
+        # clip was really written, and the JSON names the clip.
+        video_path = self._close_video(keep=True)
+        if video_path is not None:
+            tr.meta["video_file"] = video_path.name
+        v_flag, self.session.video = self.session.video, video_path is not None
+        try:
+            path = self.session.save_try(
+                tr,
+                raw26=p["raw26"],
+                task=task,
+                leg=leg,
+                guessed_task=gt,
+                guessed_leg=gl,
+                task_confidence=gc,
+                corrected=corrected,
+                score=score,
+                confidence=confidence,
+                clues=clues,
+                reasons=reasons,
+                events=events,
+            )
+        finally:
+            self.session.video = v_flag  # V stays as the operator set it
         self.saved.append(path)
         self.ctrl.saved(task, self.session._counts[task])  # never the score (testing mode)
+        if video_path is not None:
+            self.ctrl.message += " Video saved."
+        elif self.video_error:
+            self.ctrl.message += f" {self.video_error} (points are saved)."
         self.seg.reset()
 
 
@@ -620,6 +688,7 @@ def run_gui(stream, out_dir, mode="auto", view="stick", frame_size=(1280, 720), 
             if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
+        runner.close()
         stream.close()
         cv2.destroyAllWindows()
     return runner.saved
