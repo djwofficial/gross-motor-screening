@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from datetime import date
 from pathlib import Path
 
@@ -56,26 +55,29 @@ class DemoRunner(Runner):
     def feed(self, item) -> None:
         super().feed(item)
         c = self.ctrl
-        if c.state != "recording" or self.buf is None:
-            if c.state in ("idle", "ready") and self.buf is None:
-                self.live = None
-            return
         now = item[0]
-        if now - self._last_live < LIVE_EVERY_S or len(self.buf) < 2:
+        if now - self._last_live < LIVE_EVERY_S:
             return
-        if self.buf[-1][0] - self.buf[0][0] < LIVE_MIN_S:
+        if c.state == "recording" and self.buf is not None and len(self.buf) >= 2:
+            frames_src = [(b[0], b[1]) for b in self.buf]
+        elif len(self.hist) >= 2:
+            frames_src = list(self.hist)
+        else:
+            return
+        if frames_src[-1][0] - frames_src[0][0] < LIVE_MIN_S:
             return
         self._last_live = now
-        task = c.preset_task
-        if task is None:
-            self.live = {"error": "press 1/2/3 to choose the task for a live score"}
-            return
         from app.main import score_try
         from common.format import Try
+        from model.task_classifier import predict_task_from_clues
 
-        t = np.array([b[0] for b in self.buf], dtype=np.float64)
-        tr = Try(points=np.stack([b[1] for b in self.buf]).astype(np.float32), t=t - t[0], meta={})
+        t = np.array([f[0] for f in frames_src], dtype=np.float64)
+        pts = np.stack([f[1] for f in frames_src]).astype(np.float32)
+        tr = Try(points=pts, t=t - t[0], meta={})
         try:
+            task = c.preset_task or c.choice_task
+            if task is None:
+                task, _leg, _tconf = predict_task_from_clues(tr.points, tr.t)
             _clues, score, conf, reasons = score_try(tr, task)
             self.live = {"score": score, "confidence": conf, "reasons": reasons, "task": task}
         except ValueError as e:  # e.g. no torso found yet
@@ -179,16 +181,17 @@ def draw_demo(runner: DemoRunner):
         y += 55 if i == 0 else 42
 
     live = runner.live
-    if c.state in ("recording", "confirm") and live:
-        _panel(img, SCREEN_W - 560, 20, 540, 130)
+    if live:
+        _panel(img, SCREEN_W - 580, 20, 560, 130)
         if "error" in live:
-            _text(img, live["error"][:48], (SCREEN_W - 545, 70), 0.6, (230, 230, 230), 1)
+            _text(img, live["error"][:50], (SCREEN_W - 565, 70), 0.6, (230, 230, 230), 1)
         else:
             sc = int(live["score"])
-            unsure = live["confidence"] < 0.6
-            label = f"LIVE: {sc} {SCORE_NAMES[sc]}" + ("  (unsure)" if unsure else "")
-            _text(img, label, (SCREEN_W - 545, 70), 1.2, SCORE_COLOURS[sc], 3)
-            _text(img, live["reasons"][:55], (SCREEN_W - 545, 115), 0.6, (230, 230, 230), 1)
+            tk = int(live.get("task") or 1)
+            conf = float(live.get("confidence") or 0.0)
+            label = f"Task {tk} LIVE: {sc} {SCORE_NAMES[sc]} ({conf:.0%})"
+            _text(img, label, (SCREEN_W - 565, 70), 1.05, SCORE_COLOURS[sc], 3)
+            _text(img, live["reasons"][:58], (SCREEN_W - 565, 115), 0.6, (230, 230, 230), 1)
 
     if runner.result and c.state in ("idle", "ready"):
         lines, col = summary_lines(runner.result)
@@ -224,30 +227,33 @@ def draw_demo(runner: DemoRunner):
 def run_demo(stream, out_dir, mode="manual", frame_size=(1280, 720), source="fake"):
     import cv2
 
+    from app.ui import PoseWorker
+
     runner = DemoRunner(out_dir, mode=mode, frame_size=frame_size, source=source)
     name = "Gross motor screening (screening aid, not a diagnosis)"
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-    paced = source == "fake"
-    t_start, t_first = time.monotonic(), None
+    worker = PoseWorker(stream, paced=source == "fake")
     try:
         while not runner.quit:
-            item = stream.read()
-            if item is None:
-                runner.ctrl.message = "The video ended. Press Q to quit."
-            else:
+            for item in worker.take(wait_s=0.005):
                 runner.feed(item)
-                if paced:
-                    t_first = item[0] if t_first is None else t_first
-                    wait = (item[0] - t_first) - (time.monotonic() - t_start)
-                    if wait > 0:
-                        time.sleep(wait)
+            if worker.error is not None:
+                runner.ctrl.message = (
+                    f"Camera stopped ({worker.error}). Earlier tries are saved. Backspace if a "
+                    "try is open, then Q; check the camera and restart with the same child code."
+                )
+            elif worker.ended and worker.items.empty():
+                runner.ctrl.message = "The video ended. Press Q to quit."
             cv2.imshow(name, draw_demo(runner))
             runner.press(key_name(cv2.waitKeyEx(1)))
             if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
+        stopped = worker.stop()
         runner.close()  # an unconfirmed video clip is discarded
         stream.close()
+        if not stopped:
+            worker.stop(timeout=2.0)
         cv2.destroyAllWindows()
     return runner.saved
 
