@@ -302,6 +302,9 @@ class Runner:
         self.out_dir = Path(out_dir)
         self.ctrl = Controller(mode)
         self.seg = Segmenter()
+        from live.track import ChildTracker
+
+        self.tracker = ChildTracker(frame_size)  # keeps the lock on the child between frames (#33)
         self.frame_size = frame_size
         self.source = source
         self.pre_roll_s = PRE_ROLL_S
@@ -326,7 +329,6 @@ class Runner:
         return (len(self.hist) - 1) / dt if dt > 0 else 0.0
 
     def feed(self, item) -> None:
-        from common.pick import pick_child
         from live.convert import halpe_to_body25
         from live.quality import check
 
@@ -335,16 +337,18 @@ class Runner:
             self.hist.clear()
             self.pre.clear()
             self.seg.reset()
+            self.tracker.reset()
             if self.buf is not None:
                 self.buf = []
         people25 = halpe_to_body25(kp26, sc26)
-        found = people25.shape[0] > 0
-        child25 = pick_child([people25])[0]  # live: Revallo's tracked pick replaces this
-        raw = (
-            np.concatenate([kp26, sc26[..., None]], axis=-1)[0].astype(np.float32)
-            if found
-            else np.zeros((26, 3), np.float32)
-        )
+        i = self.tracker.update(people25, t)  # the locked child; anyone else is ignored
+        found = i is not None
+        if found:
+            child25 = people25[i].astype(np.float32)
+            raw = np.concatenate([kp26[i], sc26[i][..., None]], axis=-1).astype(np.float32)
+        else:
+            child25 = np.zeros((25, 3), np.float32)
+            raw = np.zeros((26, 3), np.float32)
         self.last_points = child25 if found else None
         self.last_frame = frame
 
@@ -382,6 +386,7 @@ class Runner:
             self.out_dir, child=code, age_months=age, video=False, consent_level=consent
         )
         self.hist.clear()
+        self.tracker.reset()  # new child: lock again at the start line
 
     def _do_video(self, on):
         # V on/off. The recorder gets the current V setting with every frame (_offer_video),
@@ -438,6 +443,7 @@ class Runner:
 
     def _do_ready_ok(self):
         self.seg.reset()
+        self.tracker.reset()  # the child stands at the start line now: lock on them
 
     def _do_start(self, how):
         self.buf = list(self.pre)  # keep the pre-roll before the start (points only, no video)
