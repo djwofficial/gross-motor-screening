@@ -75,7 +75,8 @@ Product flow (`app/main.py`): pose stream -> `halpe_to_body25` -> `pick_child` -
 (automatic start/end; manual Start/Stop as fallback) -> `predict_task` -> operator confirms or
 corrects -> `timeline` -> `compute` -> `predict` -> `explain` -> `Session.save_try` (JSON + `log.csv`).
 Below `CHECK_BY_TEACHER_BELOW` confidence the log says "check by teacher" instead of a score.
-No score and no timeline on screen in testing mode.
+No score and no timeline on screen in testing mode, unless `python -m app.ui --show-score`
+(live score + summary after Enter; Daryn, 2026-11-19).
 
 ## How to work
 - One task = one branch (`marty/load-b`, `louise/clues-task1`, ...) = one pull request into `main`.

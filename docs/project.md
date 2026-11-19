@@ -39,7 +39,8 @@ webcam → RTMPose (rtmlib `BodyWithFeet`, 26 points) → convert to 25 BODY_25 
 pick the child → automatic start/end → guess task and leg (operator confirms) → timeline →
 clues → random forest → score + confidence + reasons → JSON per try + `log.csv`.
 Below the confidence threshold the log says "check by teacher" instead of a score.
-The screen shows no score and no timeline in testing mode.
+The screen shows no score and no timeline in testing mode, unless the app runs with
+`--show-score` (live score while recording, summary after Enter; decided 2026-11-19).
 
 ## How we judge success
 1. **Offline, group B:** random forest vs baseline per task, GroupKFold by child,
