@@ -23,7 +23,7 @@ scores (P,26), frame)` or `None`; `halpe_to_body25(keypoints, scores) -> (...,25
 **Who waits for you:** Daryn (integration Nov 22), Louise and Theresia (team clips as points Nov 15),
 Louise (task 3 columns Nov 17), Freya (live points and video saving in the GUI).
 
-## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); push directly to `main` or open a PR with `Closes #<issue>` to close the task)
 | Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
 | Nov 8 | Milestone 1 | Easy | Same first line | #26 |

@@ -24,5 +24,4 @@ Pro free through the GitHub Student Developer Pack (education.github.com/pack). 
 echo '{"required_status_checks":{"strict":true,"contexts":["test"]},"enforce_admins":false,"required_pull_request_reviews":{"require_code_owner_reviews":true,"required_approving_review_count":1},"restrictions":null}' \
   | gh api -X PUT repos/djwofficial/gross-motor-screening/branches/main/protection --input -
 ```
-This makes every change go through a PR with green CI and a review by the folder's owner.
-Until then, the rule in AGENTS.md (one task = one branch = one PR) is followed by agreement.
+Teammates can push directly to `main` (after running `git pull --rebase origin main`, `ruff format .`, `ruff check .`, and `pytest`, staying inside their own folder) or use a branch and PR. Put `Closes #<issue>` in the commit message (or PR) to close the task on the project board.

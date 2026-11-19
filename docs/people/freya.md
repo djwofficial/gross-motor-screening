@@ -24,7 +24,7 @@ raw26=None, events=None) -> Path`; `load_record(path)`; `LOG_FIELDS`;
 **Who waits for you:** Louise, Marty, Theresia (replay, Nov 10: it is due first), Daryn (integration
 Nov 22), everyone (dry run Nov 25).
 
-## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); push directly to `main` or open a PR with `Closes #<issue>` to close the task)
 | Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
 | Nov 8 | Milestone 1 | Easy | Same first line | #35 |

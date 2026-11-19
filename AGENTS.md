@@ -29,8 +29,10 @@ When the user says who they are ("I'm Freya", "aku Marty"):
    early is fine).
 3. If `docs/task_cards/<name>_<date>_*.md` exists for it, follow that card. If not, draft one from
    the row with `docs/task_card_template.md` and show it before writing code.
-4. Work on a branch `<name>/<short-task>`; stay inside their files. When the task's "Done when"
-   check passes, open the PR with `Closes #<issue>` and the evidence. Merging it closes the issue
+4. Stay inside their files. You may commit and push directly to `main` (run
+   `git pull --rebase origin main` first) or work on a branch `<name>/<short-task>` and open a PR.
+   When the task's "Done when" check passes, record the evidence in the task card and push to `main`
+   (or open a PR) with `Closes #<issue>` in the commit message. Pushing to `main` closes the issue
    and moves the card to Done.
 If the user doesn't say who they are, ask before changing any file.
 
@@ -79,9 +81,12 @@ No score and no timeline on screen in testing mode, unless `python -m app.ui --s
 (live score + summary after Enter; Daryn, 2026-11-19).
 
 ## How to work
-- One task = one branch (`marty/load-b`, `louise/clues-task1`, ...) = one pull request into `main`.
-- Before pushing: `ruff format .`, `ruff check .`, `pytest`. CI runs the same on every PR.
-- Put the "Done when" evidence from the task card (number, plot, screenshot) in the PR text.
+- You may commit and push directly to `main` (`git pull --rebase origin main` first), or use a
+  branch (`marty/load-b`, `louise/clues-task1`, ...) and a pull request. Put `Closes #<issue>` in
+  your commit message (or PR) so GitHub closes the task automatically.
+- Before pushing: `ruff format .`, `ruff check .`, `pytest`. CI runs the same on every push and PR.
+- Put the "Done when" evidence from the task card (number, plot, screenshot) in the task card
+  (`docs/task_cards/`) and commit/PR text.
 - Add your own behaviour tests in `tests/` (not in `tests/contracts/`).
 - Stubs raise `NotImplementedError("Name, date: ...")` or return safe dummy values; replace them,
   keep the signature. `python -m app.main --fake` must keep working after your change.
