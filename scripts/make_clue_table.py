@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from common import body25 as b  # noqa: E402
 from common.geometry import valid  # noqa: E402
+from common.pick import pick_child  # noqa: E402
 from data.load_b import DEFAULT_ZIP, FPS, list_files, parse_name, read_file  # noqa: E402
 from features.clues import CLUE_NAMES, compute  # noqa: E402
 
@@ -90,7 +91,7 @@ def main() -> None:
                 )
                 picked = "single"
             else:
-                pts, picked = pick_temp(frames), "temp"
+                pts, picked = pick_child(frames), "pick_child"
             t = np.arange(len(pts)) / FPS
             try:
                 clues = compute(m["task"], pts, t)

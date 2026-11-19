@@ -106,26 +106,22 @@ def support_leg_from_norm(n: np.ndarray) -> str:
 
 
 def extract_task_clues(points: np.ndarray, t: np.ndarray) -> dict[str, float]:
-    """Compute stand-in movement clues (CLUE_NAMES[1..3]) and task kinematics in torso lengths & seconds."""
+    """Compute movement clues from Louise & Revallo (features.clues.compute) plus task kinematics."""
     n = normalize(points)
     n_frames = len(t)
     dt = float((t[-1] - t[0]) / max(n_frames - 1, 1)) if n_frames > 1 else 1.0 / 30.0
     duration_s = float(t[-1] - t[0]) if n_frames > 1 else 0.0
 
-    lx = _interp_1d(n[:, b.L_ANKLE, 0])
     ly = _interp_1d(n[:, b.L_ANKLE, 1])
-    rx = _interp_1d(n[:, b.R_ANKLE, 0])
     ry = _interp_1d(n[:, b.R_ANKLE, 1])
-    hx = _interp_1d(n[:, b.MID_HIP, 0])
     hy = _interp_1d(n[:, b.MID_HIP, 1])
+
+    t1_clues = compute_clues(1, points, t)
+    t2_clues = compute_clues(2, points, t)
+    t3_clues = compute_clues(3, points, t)
 
     foot_diff = np.abs(ly - ry)
     up_mask = foot_diff > 0.12
-    t1_clues = compute_clues(1, points, t)
-    one_foot_s = float(t1_clues["one_foot_s"])
-    touchdowns = float(t1_clues["touchdowns"])
-    sway = float(t1_clues["sway"])
-    wobble_s = float(t1_clues["wobble_s"])
     one_foot_frac = float(up_mask.mean()) if n_frames > 0 else 0.0
     foot_diff_med = float(np.median(foot_diff)) if n_frames > 0 else 0.0
     foot_diff_p75 = float(np.percentile(foot_diff, 75)) if n_frames > 0 else 0.0
@@ -133,11 +129,11 @@ def extract_task_clues(points: np.ndarray, t: np.ndarray) -> dict[str, float]:
     sup_y = np.minimum(ly, ry)
     sup_y_smooth = _smooth_1d(sup_y, width=5)
     base_y = float(np.percentile(sup_y_smooth, 20)) if n_frames > 0 else 0.0
-    elev = sup_y_smooth - base_y
-    hop_mask = up_mask & (elev > 0.07)
-    hops = float(
+    hop_mask = up_mask & ((sup_y_smooth - base_y) > 0.07)
+    fallback_hops = float(
         np.sum((~hop_mask[:-1]) & hop_mask[1:]) + (1 if (len(hop_mask) > 0 and hop_mask[0]) else 0)
     )
+    hops = float(t2_clues["hops"]) if float(t2_clues["hops"]) > 0 else fallback_hops
     sup_vy_std = float(np.std(np.diff(sup_y_smooth) / max(dt, 1e-3))) if n_frames > 1 else 0.0
     hip_vy_std = float(np.std(np.diff(hy) / max(dt, 1e-3))) if n_frames > 1 else 0.0
     sup_y_range = (
@@ -146,54 +142,18 @@ def extract_task_clues(points: np.ndarray, t: np.ndarray) -> dict[str, float]:
         else 0.0
     )
 
-    pause_runs: list[int] = []
-    cur = 0
-    for is_pause in ~hop_mask:
-        if is_pause:
-            cur += 1
-        else:
-            if cur > 0:
-                pause_runs.append(cur)
-            cur = 0
-    if cur > 0:
-        pause_runs.append(cur)
-    longest_pause_s = float(max(pause_runs, default=0) * dt)
-
-    foot_gap = np.hypot(lx - rx, ly - ry)
-    both_y = 0.5 * (ly + ry)
-    hip_speed = np.hypot(np.diff(hx, prepend=hx[0]), np.diff(hy, prepend=hy[0])) / max(dt, 1e-3)
-    air_mask = (both_y > np.percentile(both_y, 30) + 0.10) | (hip_speed > 0.8)
-    air_s = float(np.sum(air_mask) * dt)
-    if np.any(air_mask):
-        ai = np.nonzero(air_mask)[0]
-        i0, i1 = int(ai[0]), int(ai[-1])
-    else:
-        i0, i1 = 0, max(n_frames - 1, 0)
-    feet_gap_takeoff = float(foot_gap[max(0, i0 - 1)]) if n_frames > 0 else 0.0
-    feet_gap_landing = float(foot_gap[min(max(n_frames - 1, 0), i1 + 1)]) if n_frames > 0 else 0.0
-    ank_cx, ank_cy = 0.5 * (lx + rx), 0.5 * (ly + ry)
-    jump_size = (
-        float(
-            np.hypot(ank_cx[i1] - ank_cx[i0], ank_cy[i1] - ank_cy[i0])
-            + np.hypot(hx[-1] - hx[0], hy[-1] - hy[0])
-        )
-        * 0.5
-        if n_frames > 0
-        else 0.0
-    )
-
     return {
         "duration_s": duration_s,
-        "one_foot_s": one_foot_s,
-        "touchdowns": touchdowns,
-        "sway": sway,
-        "wobble_s": wobble_s,
+        "one_foot_s": float(t1_clues["one_foot_s"]),
+        "touchdowns": float(t1_clues["touchdowns"]),
+        "sway": float(t1_clues["sway"]),
+        "wobble_s": float(t1_clues["wobble_s"]),
         "hops": hops,
-        "longest_pause_s": longest_pause_s,
-        "feet_gap_takeoff": feet_gap_takeoff,
-        "feet_gap_landing": feet_gap_landing,
-        "air_s": air_s,
-        "jump_size": jump_size,
+        "longest_pause_s": float(t2_clues["longest_pause_s"]),
+        "feet_gap_takeoff": float(t3_clues["feet_gap_takeoff"]),
+        "feet_gap_landing": float(t3_clues["feet_gap_landing"]),
+        "air_s": float(t3_clues["air_s"]),
+        "jump_size": float(t3_clues["jump_size"]),
         "one_foot_frac": one_foot_frac,
         "foot_diff_med": foot_diff_med,
         "foot_diff_p75": foot_diff_p75,
