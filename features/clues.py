@@ -29,9 +29,8 @@ duration_s: live, the length of a try is set by our automatic start and end, so 
 not learn from it. Adding or renaming a clue is fine, but tell Daryn and Marty and update
 CLUE_NAMES in the same PR.
 
-Task 1 is real (Louise, #20) and task 3 is real (Revallo, #32). STUB for task 2: only
-duration_s is real; the other values are 0.0 and the timeline is one UNKNOWN block until it
-lands. Ideas per clue: Job Card 2 in the team Google Doc.
+All three tasks are real: task 1 (Louise, #20), task 2 (Louise, #21), task 3 (Revallo, #32).
+Ideas per clue: Job Card 2 in the team Google Doc.
 """
 
 from __future__ import annotations
