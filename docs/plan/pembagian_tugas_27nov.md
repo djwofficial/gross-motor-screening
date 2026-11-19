@@ -157,9 +157,8 @@ Risikonya kalau 6 orang masing-masing melempar tugas ke AI tanpa aturan bersama:
    - Setiap orang dan AI-nya hanya mengubah folder miliknya.
    - Folder `common/` dan `tests/contracts/` hanya diubah lewat Daryn.
    - Di GitHub, pasang CODEOWNERS dan branch protection: perubahan di folder orang lain butuh review dari pemiliknya.
-5. **PR kecil, satu tugas = satu branch = satu PR.**
-   - Di deskripsi PR, tempel bukti "Selesai kalau" (angka, plot, atau screenshot).
-   - Merge harus setelah smoke test hijau.
+5. **Langsung push ke `main` atau lewat PR.**
+   - Setiap orang boleh commit dan push langsung ke `main` (jalankan `git pull --rebase origin main`, `ruff format .`, `ruff check .`, dan `pytest` dulu) atau lewat branch/PR, dengan mencantumkan `Closes #<issue>` di pesan commit/PR dan bukti "Selesai kalau" di `docs/task_cards/`.
 6. **Jangan percaya angka atau API karangan AI.**
    - Setiap angka harus keluar dari script yang benar-benar dijalankan (aturan no. 2 di CLAUDE.md).
    - API rtmlib dan indeks Halpe dicek ke source aslinya (repo rtmlib, `halpe26.py` di mmpose), bukan dari jawaban AI.

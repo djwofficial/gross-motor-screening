@@ -27,7 +27,7 @@ Units: seconds and torso lengths (`common.geometry.normalize`, y points up), nev
 **Who waits for you:** Daryn (clue table Nov 18 for the model: the tightest handoff in the plan),
 Marty (task classifier), Freya and Daryn (`explain` for the log).
 
-## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); `Closes #<issue>` in your PR closes the task)
+## Tasks (status is on the [project board](https://github.com/users/djwofficial/projects/3); push directly to `main` or open a PR with `Closes #<issue>` to close the task)
 | Due | Task | Level | Done when | Issue |
 |---|---|---|---|---|
 | Nov 8 | Milestone 1 | Easy | Same first line | #19 |

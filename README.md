@@ -76,9 +76,11 @@ runs/      app output (ignored; testing-day data goes to the encrypted drive, ne
 ```
 
 ## 5. Working together
-One task = one branch = one pull request. CI must be green before merging. Change only your
-own folder; shared files (`common/`, `tests/contracts/`, `app/main.py`, requirements) change
-through Daryn. Details: [AGENTS.md](AGENTS.md).
+You can commit and push directly to `main` (run `git pull --rebase origin main`, `ruff format .`,
+`ruff check .`, and `pytest` first) or use a branch and a pull request. Put `Closes #<issue>` in
+your commit message (or PR) to close the task on the board. Change only your own folder; shared
+files (`common/`, `tests/contracts/`, `app/main.py`, requirements) change through Daryn. Details:
+[AGENTS.md](AGENTS.md).
 
 ## References
 - Dataset paper: Kim H. H. et al. (2023), GigaScience 12, giad039,

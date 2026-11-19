@@ -21,7 +21,8 @@ Screens (Controller.state):
                Backspace cancels the try
 
 Keys: 1/2/3 task, L/R leg, Space manual start/stop (fallback, also in automatic mode),
-Enter confirm, Backspace cancel the try, N next child, V video on/off (consent level 3 only),
+Enter confirm, Backspace cancel the try, N next child, V video on/off (consent level 3 only;
+the camera picture of each confirmed try is saved by live.video_writer),
 Q quit (Esc in the setup screen).
 
 Split: Controller = keys and states only (pure, tested without a window). Runner = the pipeline
@@ -34,7 +35,9 @@ from __future__ import annotations
 
 import argparse
 import math
+import queue
 import sys
+import threading
 import time
 from collections import deque
 from datetime import date
@@ -312,6 +315,8 @@ class Runner:
         self.last_frame = None
         self.saved: list[Path] = []
         self.quit = False
+        self.recorder = None  # live.video_writer.TryVideoRecorder of the current try
+        self.video_error: str | None = None  # set for the rest of the try after a writer error
 
     # ------------------------------------------------------------- per frame
     def fps(self) -> float:
@@ -356,6 +361,7 @@ class Runner:
             c.problems = check(pts if found else None, self.fps(), self.frame_size)
         if self.buf is not None:
             self.buf.append((t, child25, raw))
+            self._offer_video(frame)
         if c.mode == "auto" and c.state in ("idle", "ready", "recording"):
             ev = self.seg.update(child25 if found else None, t)
             self._apply(c.segment(ev))
@@ -378,19 +384,69 @@ class Runner:
         self.hist.clear()
 
     def _do_video(self, on):
-        # Saving the picture itself is Revallo's task (#30); the flag goes into JSON and log.
+        # V on/off. The recorder gets the current V setting with every frame (_offer_video),
+        # so turning V off in the middle of a try stops adding frames from then on.
         if self.session is not None:
             self.session.video = bool(on)
+
+    # ------------------------------------------------------------- video (Revallo's #30)
+    def _start_video(self):
+        """One recorder per try, only when the parent ticked consent level 3."""
+        self._close_video(keep=False)  # a left-over recorder is never kept
+        self.video_error = None
+        if self.session is None or self.session.consent_level != 3:
+            return
+        from live.video_writer import TryVideoRecorder
+
+        fps = self.fps()
+        try:
+            self.recorder = TryVideoRecorder(
+                self.out_dir,
+                child=self.session.child,
+                consent_level=self.session.consent_level,
+                fps=round(fps) if fps >= 1 else 30.0,
+                frame_size=tuple(self.frame_size),
+            )
+        except ValueError as e:  # e.g. odd frame size or a child code the file name can't take
+            self.recorder, self.video_error = None, f"Video not recorded: {e}"
+
+    def _offer_video(self, frame):
+        """Send the original (unmirrored) BGR frame while the try is being recorded."""
+        if self.recorder is None or frame is None:
+            return
+        try:
+            self.recorder.offer(frame, enabled=self.ctrl.video)
+        except ValueError as e:  # the frame doesn't match the camera size given at the start
+            self._close_video(keep=False)
+            self.video_error = f"Video not recorded: {e}"
+
+    def _close_video(self, keep: bool):
+        """keep=True on Enter: publish the clip. Returns its path, or None if nothing was saved."""
+        rec, self.recorder = self.recorder, None
+        if rec is None:
+            return None
+        try:
+            return rec.close(keep=keep)
+        except (OSError, TimeoutError) as e:
+            if keep:
+                self.video_error = f"Video not saved: {e}"
+            return None
+
+    def close(self):
+        """Window closed or Q: an unconfirmed clip is discarded."""
+        self._close_video(keep=False)
 
     def _do_ready_ok(self):
         self.seg.reset()
 
     def _do_start(self, how):
-        self.buf = list(self.pre)  # keep the pre-roll before the start
+        self.buf = list(self.pre)  # keep the pre-roll before the start (points only, no video)
         self.pending = None
+        self._start_video()
 
     def _do_cancel(self):
         self.buf, self.pending = None, None
+        self._close_video(keep=False)
         self.seg.reset()
 
     def _do_stop(self):
@@ -400,6 +456,7 @@ class Runner:
         if len(buf) < 2:
             self.ctrl.state = "idle"
             self.ctrl.message = "Try too short (not saved)."
+            self._close_video(keep=False)
             self.seg.reset()
             return
         t = np.array([b[0] for b in buf], dtype=np.float64)
@@ -437,23 +494,36 @@ class Runner:
             events = timeline(task, tr.points, tr.t)
         except ValueError as e:  # e.g. no torso found in any frame
             clues, score, confidence, reasons, events = {}, 1, 0.0, f"not scored: {e}", None
-        path = self.session.save_try(
-            tr,
-            raw26=p["raw26"],
-            task=task,
-            leg=leg,
-            guessed_task=gt,
-            guessed_leg=gl,
-            task_confidence=gc,
-            corrected=corrected,
-            score=score,
-            confidence=confidence,
-            clues=clues,
-            reasons=reasons,
-            events=events,
-        )
+        # The points are saved even if the video fails; the log's video column says whether a
+        # clip was really written, and the JSON names the clip.
+        video_path = self._close_video(keep=True)
+        if video_path is not None:
+            tr.meta["video_file"] = video_path.name
+        v_flag, self.session.video = self.session.video, video_path is not None
+        try:
+            path = self.session.save_try(
+                tr,
+                raw26=p["raw26"],
+                task=task,
+                leg=leg,
+                guessed_task=gt,
+                guessed_leg=gl,
+                task_confidence=gc,
+                corrected=corrected,
+                score=score,
+                confidence=confidence,
+                clues=clues,
+                reasons=reasons,
+                events=events,
+            )
+        finally:
+            self.session.video = v_flag  # V stays as the operator set it
         self.saved.append(path)
         self.ctrl.saved(task, self.session._counts[task])  # never the score (testing mode)
+        if video_path is not None:
+            self.ctrl.message += " Video saved."
+        elif self.video_error:
+            self.ctrl.message += f" {self.video_error} (points are saved)."
         self.seg.reset()
 
 
@@ -594,33 +664,99 @@ class FakeLoopStream:
         pass
 
 
+class PoseWorker:
+    """Runs stream.read() (camera + pose detection) in its own thread.
+
+    The window then never makes pose wait: drawing, imshow and the key check run while the next
+    frame is being detected. Every item is kept, in order (none are dropped), and handed to the
+    window with take(). An OSError from the stream (e.g. no camera frame for 5 s) is kept in
+    .error; .ended is True once the stream has no more frames. paced=True plays a fake stream
+    (which answers instantly) at the speed of its own time stamps.
+    """
+
+    def __init__(self, stream, paced: bool = False, max_items: int = 256):
+        self.stream, self.paced = stream, paced
+        self.items: queue.Queue = queue.Queue(maxsize=max_items)
+        self.error: Exception | None = None
+        self.ended = False
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="pose-worker", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        t_start, t_first = time.monotonic(), None
+        try:
+            while not self._stop.is_set():
+                item = self.stream.read()
+                if item is None:
+                    break
+                if self.paced:  # fake frames come instantly: play them in real time
+                    t_first = item[0] if t_first is None else t_first
+                    wait = (item[0] - t_first) - (time.monotonic() - t_start)
+                    if wait > 0 and self._stop.wait(wait):
+                        break
+                while not self._stop.is_set():
+                    try:
+                        self.items.put(item, timeout=0.1)  # the window takes them every loop
+                        break
+                    except queue.Full:
+                        pass
+        except OSError as e:
+            self.error = e
+        finally:
+            self.ended = True
+
+    def take(self, wait_s: float = 0.0) -> list:
+        """All items that are ready, in order; waits up to wait_s for the first one."""
+        out = []
+        try:
+            out.append(self.items.get(timeout=wait_s) if wait_s > 0 else self.items.get_nowait())
+            while True:
+                out.append(self.items.get_nowait())
+        except queue.Empty:
+            pass
+        return out
+
+    def stop(self, timeout: float = 6.0) -> bool:
+        """Ask the thread to stop; True if it did within timeout (a camera read can take 5 s)."""
+        self._stop.set()
+        self.thread.join(timeout)
+        return not self.thread.is_alive()
+
+
 def run_gui(stream, out_dir, mode="auto", view="stick", frame_size=(1280, 720), source="fake"):
-    """Open the window and run until Q. Every try is saved the moment Enter is pressed."""
+    """Open the window and run until Q. Every try is saved the moment Enter is pressed.
+
+    Pose detection runs in a PoseWorker thread; this loop feeds every new frame to the Runner
+    (in order), then draws once and checks the keys.
+    """
     import cv2
 
     runner = Runner(out_dir, mode=mode, frame_size=frame_size, source=source)
     name = "Gross motor screening (screening aid, not a diagnosis)"
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-    paced = source == "fake"
-    t_start, t_first = time.monotonic(), None
+    worker = PoseWorker(stream, paced=source == "fake")
     try:
         while not runner.quit:
-            item = stream.read()
-            if item is None:
-                runner.ctrl.message = "The video ended. Press Q to quit."
-            else:
+            for item in worker.take(wait_s=0.005):  # short wait: no busy loop when idle
                 runner.feed(item)
-                if paced:  # fake frames come instantly: play them in real time
-                    t_first = item[0] if t_first is None else t_first
-                    wait = (item[0] - t_first) - (time.monotonic() - t_start)
-                    if wait > 0:
-                        time.sleep(wait)
+            if worker.error is not None:  # e.g. no camera frame for 5 s (PoseStream closes)
+                runner.ctrl.message = (
+                    f"Camera stopped ({worker.error}). Earlier tries are saved. Backspace if a "
+                    "try is open, then Q; check the camera and restart with the same child code."
+                )
+            elif worker.ended and worker.items.empty():
+                runner.ctrl.message = "The video ended. Press Q to quit."
             cv2.imshow(name, draw_screen(runner, view))
             runner.press(key_name(cv2.waitKeyEx(1)))
             if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
-        stream.close()
+        stopped = worker.stop()
+        runner.close()
+        stream.close()  # also wakes a camera read that is still waiting
+        if not stopped:
+            worker.stop(timeout=2.0)
         cv2.destroyAllWindows()
     return runner.saved
 
@@ -641,6 +777,12 @@ def main(argv=None) -> int:
         help="rtmlib model size; the plan uses balanced, lightweight is faster on a CPU",
     )
     ap.add_argument("--out", type=Path, default=Path("runs") / date.today().isoformat())
+    ap.add_argument(
+        "--show-score",
+        action="store_true",
+        help="camera picture with points, live score while recording, summary after Enter "
+        "(app.demo); without it the screen shows no score",
+    )
     args = ap.parse_args(argv)
 
     if args.fake:
@@ -655,9 +797,14 @@ def main(argv=None) -> int:
         w = int(stream.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         h = int(stream.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
         size, source = (w, h), ("video" if args.video else "webcam")
-    saved = run_gui(
-        stream, args.out, mode=args.mode, view=args.view, frame_size=size, source=source
-    )
+    if args.show_score:
+        from app.demo import run_demo
+
+        saved = run_demo(stream, args.out, mode=args.mode, frame_size=size, source=source)
+    else:
+        saved = run_gui(
+            stream, args.out, mode=args.mode, view=args.view, frame_size=size, source=source
+        )
     print(f"{len(saved)} tries saved in {args.out}")
     return 0
 
