@@ -439,9 +439,12 @@ def buttons(runner) -> list[Button]:
         for k in (1, 2, 3):
             left.append(Button(str(k), TASK_SHORT[k], str(k), "seg", selected=task == k))
         left.append(Button(None, "", kind="gap"))
-        left.append(Button(None, "Leg" if leg else "Leg · auto", kind="label"))
-        for k, name in (("L", "Left"), ("R", "Right")):
-            left.append(Button(k, name, k, "seg", selected=leg == k))
+        if task == 3:  # standing long jump: both feet, no support leg to choose
+            left.append(Button(None, "Both feet", kind="label"))
+        else:
+            left.append(Button(None, "Leg" if leg else "Leg · auto", kind="label"))
+            for k, name in (("L", "Left"), ("R", "Right")):
+                left.append(Button(k, name, k, "seg", selected=leg == k))
         if st in ("idle", "ready"):
             if c.consent == 3:
                 on = bool(c.video)
@@ -691,6 +694,12 @@ def _readiness_card(cv: Canvas, c) -> None:
         yy += 20
 
 
+def _task_leg(task: int, leg) -> str:
+    """'Task 1 · stand on one leg · leg L'; task 3 (jump with both feet) has no leg."""
+    text = f"Task {task} · {b.TASKS[task]}"
+    return text if task == 3 else f"{text} · leg {leg}"
+
+
 def _confirm_card(cv: Canvas, c) -> None:
     if not c.guess:
         return
@@ -708,15 +717,16 @@ def _confirm_card(cv: Canvas, c) -> None:
     cv.text(cx, yy, "Guess", 13, "medium", DIM)
     cv.text(x + w - 28, yy, f"{gc:.0%} sure", 13, "medium", DIM, "rt")
     yy += 22
-    cv.text(cx, yy, f"Task {gt} · {b.TASKS[gt]} · leg {gl}", 17, "regular", TEXT)
+    cv.text(cx, yy, _task_leg(gt, gl), 17, "regular", TEXT)
     yy += 40
     cv.text(cx, yy, "Will be saved as", 13, "medium", DIM)
     if corrected:
         cv.text(x + w - 28, yy, "Corrected", 13, "semibold", _bgr("#e3b341"), "rt")
     yy += 22
-    cv.text(cx, yy, f"Task {ct} · {b.TASKS[ct]} · leg {cl}", 20, "semibold", TEXT)
+    cv.text(cx, yy, _task_leg(ct, cl), 20, "semibold", TEXT)
     yy += 44
-    cv.text(cx, yy, "1/2/3 task · L/R leg · Enter save · Backspace cancel", 13, "regular", FAINT)
+    keys = "1/2/3 task · " + ("" if ct == 3 else "L/R leg · ") + "Enter save · Backspace cancel"
+    cv.text(cx, yy, keys, 13, "regular", FAINT)
 
 
 def _toast(cv: Canvas, message: str) -> None:
@@ -793,7 +803,7 @@ def _result_card(cv: Canvas, r: dict, x, y, w) -> None:
     inner = w - 40
     check = r.get("check") or r.get("score") is None
     reasons = wrap(r.get("reasons", ""), 13, "regular", inner, 3)
-    head = f"Task {r['task']} · {b.TASKS[r['task']]} · leg {r['leg']}"
+    head = _task_leg(r["task"], r["leg"])
     if check:
         words = wrap("Model is unsure: check by teacher.", 15, "regular", inner, 2)
         col, chip = PURPLE, "Check by teacher"

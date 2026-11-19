@@ -214,7 +214,10 @@ class Controller:
             self.preset_task = int(k)
             return True
         if k in ("L", "R"):
-            self.preset_leg = k
+            if self.preset_task == 3:
+                self.message = "Task 3 is a jump with both feet: no leg to choose."
+            else:
+                self.preset_leg = k
             return True
         return False
 
@@ -248,7 +251,10 @@ class Controller:
         if k in ("1", "2", "3"):
             self.choice_task = int(k)
         elif k in ("L", "R"):
-            self.choice_leg = k
+            if self.choice_task == 3:
+                self.message = "Task 3 is a jump with both feet: no leg to choose."
+            else:
+                self.choice_leg = k
         elif k == "BACKSPACE":
             self.state, self.guess = "idle", None
             self.message = "Try cancelled (not saved)."
@@ -550,7 +556,8 @@ def status_lines(c: Controller) -> list[str]:
         )
     if c.state in ("idle", "ready", "recording"):
         task = f"{c.preset_task} ({TASKS[c.preset_task]})" if c.preset_task else "auto"
-        lines.append(f"task {task}  leg {c.preset_leg or 'auto'}")
+        leg = "both feet" if c.preset_task == 3 else f"leg {c.preset_leg or 'auto'}"
+        lines.append(f"task {task}  {leg}")
     if c.message:
         lines.append(c.message)
     lines.append(
@@ -574,10 +581,15 @@ def big_lines(c: Controller) -> list[str]:
         return ["Readiness check:"] + [f"- {p}" for p in c.problems] + ["Enter starts anyway."]
     if c.state == "confirm" and c.guess:
         gt, gl, gc = c.guess
+        ct = c.choice_task
+        guess_leg = "" if gt == 3 else f", leg {gl}"
+        save_leg = "" if ct == 3 else f", leg {c.choice_leg}"
         return [
-            f"Guess: task {gt} ({TASKS[gt]}), leg {gl}  (sure {gc:.0%})",
-            f"Saving as: task {c.choice_task} ({TASKS[c.choice_task]}), leg {c.choice_leg}",
-            "Enter confirm   1/2/3 L/R correct   Backspace cancel",
+            f"Guess: task {gt} ({TASKS[gt]}){guess_leg}  (sure {gc:.0%})",
+            f"Saving as: task {ct} ({TASKS[ct]}){save_leg}",
+            "Enter confirm   "
+            + ("1/2/3" if ct == 3 else "1/2/3 L/R")
+            + " correct   Backspace cancel",
         ]
     if c.state == "recording":
         return ["RECORDING"]
