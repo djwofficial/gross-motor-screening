@@ -53,6 +53,8 @@ The first line must be `files: 4661 | children: 106 | attempts: 1555`.
 Keys still work; every key is also a button in the bottom bar.
 
 ```bash
+python -m app.main                           # open live webcam GUI (testing mode: no score shown)
+python -m app.main --show-score              # open live webcam GUI with live score overlay
 python -m app.demo                           # open GUI: live webcam + stick figure + live score (0 Bad / 1 Good / 2 Perfect)
 python -m app.ui --camera 0 --device cpu --pose-mode lightweight --show-score   # Mac live GUI
 python -m app.ui --camera 0 --device cuda --show-score                          # Windows + NVIDIA live GUI
@@ -62,8 +64,8 @@ python rescore.py runs/<date>                # scores the saved tries again; mus
 pytest                                       # contract tests + smoke test (CI runs the same)
 ruff format . && ruff check .                # before every commit
 ```
-The live webcam mode is joined on Nov 22. Until then every part works on fake data
-(`common.format.make_fake_try`) or the dataset.
+`python -m app.main` runs the full joined live pipeline; every part also runs offline on
+fake data (`--fake`, `common.format.make_fake_try`) or the dataset.
 
 ## 4. Repo layout
 ```

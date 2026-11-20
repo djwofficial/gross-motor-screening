@@ -11,9 +11,8 @@ Shared interface (final, change only through Daryn):
 The app writes "check by teacher" instead of a score when confidence < CHECK_BY_TEACHER_BELOW.
 
 Model files: models/task{n}_rf.joblib, a dict {"model": fitted sklearn classifier,
-"features": list of clue names in order}. Commit them if they are under 10 MB.
-
-STUB: without a model file it returns (1, 0.0), so every row says "check by teacher".
+"features": list of clue names in order}. Committed under 10 MB; if a model
+file is missing it falls back to (1, 0.0) so rows say "check by teacher".
 """
 
 from __future__ import annotations

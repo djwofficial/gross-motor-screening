@@ -1,10 +1,11 @@
-"""Joins the parts: pose stream -> pick child -> start/end -> task guess -> clues -> score -> log.
+"""Joins the parts: pose stream -> track child -> start/end -> task guess -> clues -> score -> log.
 
 Owner: Daryn. Run from the repo root:
 
     python -m app.main --fake                      # automatic start/end on a fake try (task 2)
     python -m app.main --fake --task 1 --mode manual
-    python -m app.main                             # live webcam: joined on Nov 22
+    python -m app.main                             # live webcam GUI (testing mode: no score shown)
+    python -m app.main --show-score                # live webcam GUI with 0/1/2 score overlay
 
 In --fake mode there is no operator, so the "confirmation" uses the task and leg the fake try
 was made with; if the guess differs, the row is marked corrected (as if the operator pressed
@@ -14,6 +15,7 @@ was made with; if the guess differs, the row is marked corrected (as if the oper
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -22,11 +24,11 @@ import numpy as np
 
 from app.session import Session
 from common.format import Try
-from common.pick import pick_child
 from features.clues import compute, explain, timeline
 from live.convert import halpe_to_body25
 from live.pose import FakePoseStream
 from live.segment import Segmenter
+from live.track import ChildTracker
 from model.predict import predict
 from model.task_classifier import predict_task
 
@@ -75,6 +77,7 @@ def finish_try(
 def run_fake(args) -> list[Path]:
     stream = FakePoseStream(task=args.task, leg=args.leg, seed=args.seed)
     session = Session(args.out, child=args.child, age_months=args.age, video=False)
+    tracker = ChildTracker(frame_size=(1280, 720))
     seg = Segmenter()
     buf_t, buf_p, buf_raw = [], [], []
     recording, start_i = args.mode == "manual", 0
@@ -84,10 +87,11 @@ def run_fake(args) -> list[Path]:
     while (item := stream.read()) is not None:
         t, kp26, sc26, _frame = item
         people25 = halpe_to_body25(kp26, sc26)  # (P, 25, 3)
-        child25 = pick_child([people25])[0]  # live: Revallo replaces this with a tracked pick
-        found = people25.shape[0] > 0
+        idx = tracker.update(people25, t)
+        found = idx is not None
+        child25 = people25[idx] if found else np.zeros((25, 3), np.float32)
         raw = (
-            np.concatenate([kp26, sc26[..., None]], axis=-1)[0]
+            np.concatenate([kp26[idx], sc26[idx, :, None]], axis=-1)
             if found
             else np.zeros((26, 3), np.float32)
         )
@@ -131,30 +135,79 @@ def run_fake(args) -> list[Path]:
     return saved
 
 
+def _frame_size(stream) -> tuple[int, int]:
+    """Read (width, height) from stream.cap, falling back to 1280x720."""
+    cap = getattr(stream, "cap", None)
+    if cap is None:
+        return (1280, 720)
+    import cv2
+
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+    return (w, h)
+
+
+def run_live(args) -> list[Path]:
+    """Open the live webcam or video pipeline and return saved try JSON paths."""
+    from app.demo import run_demo
+    from app.ui import run_gui
+    from live.pose import PoseStream
+
+    source = args.video if args.video is not None else args.camera
+    source_name = os.fspath(args.video) if args.video is not None else f"camera:{args.camera}"
+    device = args.device or ("cpu" if sys.platform == "darwin" else "cuda")
+    pose_mode = args.pose_mode or ("lightweight" if sys.platform == "darwin" else "balanced")
+    view = args.view or ("camera" if args.show_score else "stick")
+    stream = PoseStream(source=source, mode=pose_mode, device=device)
+    try:
+        frame_size = _frame_size(stream)
+        runner = run_demo if args.show_score else run_gui
+        return runner(
+            stream,
+            args.out,
+            mode=args.mode,
+            view=view,
+            frame_size=frame_size,
+            source=source_name,
+        )
+    finally:
+        stream.close()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Gross motor screening app (screening aid, not a diagnosis)"
     )
     ap.add_argument("--fake", action="store_true", help="use a fake try instead of the webcam")
+    ap.add_argument("--camera", type=int, default=0, help="webcam index for live mode")
+    ap.add_argument("--video", type=Path, default=None, help="video file instead of a live webcam")
     ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
+    ap.add_argument("--view", choices=["stick", "camera", "neutral"], default=None)
+    ap.add_argument("--device", default=None, help="pose device: cpu or cuda (default by OS)")
+    ap.add_argument(
+        "--pose-mode",
+        choices=["lightweight", "balanced", "performance"],
+        default=None,
+        help="RTMPose speed/accuracy preset (default: lightweight on Mac, balanced elsewhere)",
+    )
+    ap.add_argument(
+        "--show-score",
+        action="store_true",
+        help="show the live 0/1/2 score overlay (demo mode; not for testing days)",
+    )
     ap.add_argument("--task", type=int, choices=[1, 2, 3], default=2)
     ap.add_argument("--leg", choices=["L", "R"], default="L")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--child", default="K00")
-    ap.add_argument("--age", type=int, default=48, help="age in months")
+    ap.add_argument("--child", default="K00", help="child code (--fake mode)")
+    ap.add_argument("--age", type=int, default=48, help="age in months (--fake mode)")
     ap.add_argument("--out", type=Path, default=Path("runs") / date.today().isoformat())
     args = ap.parse_args(argv)
 
-    if not args.fake:
-        print(
-            "Live mode is joined on Nov 22 (Revallo's PoseStream + Freya's GUI). Use --fake for now."
-        )
-        return 2
-    saved = run_fake(args)
+    saved = run_fake(args) if args.fake else run_live(args)
     for p in saved:
         print(f"saved {p}")
     print(f"{len(saved)} try saved; log: {args.out / 'log.csv'}")
-    return 0 if saved else 1
+    return (0 if saved else 1) if args.fake else 0
 
 
 if __name__ == "__main__":
