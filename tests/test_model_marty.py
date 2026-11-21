@@ -62,10 +62,12 @@ def test_predict_task_with_saved_model_bundle(tmp_path: Path):
 
 
 def test_extract_task_clues_returns_all_finite_values():
+    from features.clues import CLUE_NAMES
+
     for task in (1, 2, 3):
         tr = make_fake_try(task=task, leg="L")
         clues = extract_task_clues(tr.points, tr.t)
-        for col in CLUE_COLUMNS:
+        for col in (*CLUE_COLUMNS, *CLUE_NAMES[task]):
             assert col in clues
             assert np.isfinite(clues[col])
 
@@ -92,3 +94,17 @@ def test_generate_rf_confusion_matrices_and_predict_under_1s(tmp_path: Path):
             assert (tmp_path / f"task{task}_fold{fold}_cm.png").exists()
         assert info["latencies_s"][task] < 1.0
     assert info["max_single_s"] < 1.0
+
+
+def test_generate_rf_confusion_matrices_without_duration_column(tmp_path: Path):
+    table = make_fake_table(n_children=15).drop(columns=["duration_s"])
+    info = generate_rf_confusion_matrices(table, out_dir=tmp_path, n_splits=5)
+    assert info["summary_csv"].exists()
+    assert info["max_single_s"] < 1.0
+
+    # Also verify a present-but-NaN non-feature column does not leak NaN into predict().
+    table_nan = make_fake_table(n_children=15)
+    table_nan["duration_s"] = np.nan
+    info_nan = generate_rf_confusion_matrices(table_nan, out_dir=tmp_path / "nan", n_splits=5)
+    assert info_nan["summary_csv"].exists()
+    assert info_nan["max_single_s"] < 1.0

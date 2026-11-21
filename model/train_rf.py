@@ -225,6 +225,10 @@ def _fake_clues(task: int, level: float, rng: np.random.Generator) -> dict[str, 
             "touchdowns": float(max(0, round(1.0 - level + noise(0.5)))),
             "sway": float(abs(0.30 - 0.08 * level + noise(0.05))),
             "wobble_s": float(max(0.0, 1.0 - 0.5 * level + noise(0.3))),
+            "hip_speed": float(max(0.0, 0.20 - 0.06 * level + noise(0.04))),
+            "neck_speed": float(max(0.0, 0.25 - 0.07 * level + noise(0.05))),
+            "lift_std": float(max(0.0, 0.12 - 0.04 * level + noise(0.03))),
+            "wrist_speed": float(max(0.0, 0.80 - 0.25 * level + noise(0.15))),
         }
     elif task == 2:
         clues = {

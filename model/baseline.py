@@ -277,7 +277,12 @@ def generate_rf_confusion_matrices(
         predict_mod._load.cache_clear()
         for task in tasks:
             sample_row = table[table["task"] == task].iloc[0]
-            clues = {name: float(sample_row[name]) for name in CLUE_NAMES[task]}
+            clues = {
+                name: float(sample_row[name])
+                if name in sample_row.index and pd.notna(sample_row[name])
+                else 0.0
+                for name in CLUE_NAMES[task]
+            }
             # Cold call (includes joblib load)
             t0 = time.perf_counter()
             score, conf = predict_mod.predict(task, clues)

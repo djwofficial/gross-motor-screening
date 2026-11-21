@@ -33,6 +33,7 @@ from sklearn.model_selection import GroupKFold
 from common import body25 as b
 from common.geometry import normalize
 from data.load_b import DEFAULT_ZIP, iter_tries
+from features.clues import CLUE_NAMES
 from features.clues import compute as compute_clues
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
@@ -148,6 +149,10 @@ def extract_task_clues(points: np.ndarray, t: np.ndarray) -> dict[str, float]:
         "touchdowns": float(t1_clues["touchdowns"]),
         "sway": float(t1_clues["sway"]),
         "wobble_s": float(t1_clues["wobble_s"]),
+        "hip_speed": float(t1_clues["hip_speed"]),
+        "neck_speed": float(t1_clues["neck_speed"]),
+        "lift_std": float(t1_clues["lift_std"]),
+        "wrist_speed": float(t1_clues["wrist_speed"]),
         "hops": hops,
         "longest_pause_s": float(t2_clues["longest_pause_s"]),
         "feet_gap_takeoff": float(t3_clues["feet_gap_takeoff"]),
@@ -258,11 +263,7 @@ def build_group_b_clue_table(
     t1_map: dict[str, dict[str, float]] = {}
     if task1_csv is not None and Path(task1_csv).exists():
         t1_df = pd.read_csv(task1_csv)
-        cols = [
-            c
-            for c in ("duration_s", "one_foot_s", "touchdowns", "sway", "wobble_s")
-            if c in t1_df.columns
-        ]
+        cols = [c for c in CLUE_NAMES[1] if c in t1_df.columns]
         for _, row in t1_df.iterrows():
             t1_map[str(row["file"])] = {c: float(row[c]) for c in cols}
 

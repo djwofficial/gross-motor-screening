@@ -59,7 +59,7 @@ class DemoRunner(Runner):
         self._last_live = now
         from app.main import score_try
         from common.format import Try
-        from model.task_classifier import predict_task_from_clues
+        from model.task_classifier import predict_task
 
         t = np.array([f[0] for f in frames_src], dtype=np.float64)
         pts = np.stack([f[1] for f in frames_src]).astype(np.float32)
@@ -67,7 +67,7 @@ class DemoRunner(Runner):
         try:
             task = c.preset_task or c.choice_task
             if task is None:
-                task, _leg, _tconf = predict_task_from_clues(tr.points, tr.t)
+                task, _leg, _tconf = predict_task(tr.points, tr.t)
             _clues, score, conf, reasons = score_try(tr, task)
             self.live = {"score": score, "confidence": conf, "reasons": reasons, "task": task}
         except ValueError as e:  # e.g. no torso found yet
@@ -132,7 +132,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path, default=Path("runs") / f"demo_{date.today().isoformat()}")
     args = ap.parse_args(argv)
     if not args.fake and args.video is None and args.camera is None:
-        args.camera = 0
+        from app.main import pick_camera
+
+        args.camera = pick_camera()
 
     if args.fake:
         from app.ui import FakeLoopStream

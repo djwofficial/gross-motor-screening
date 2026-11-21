@@ -41,7 +41,17 @@ from common import body25 as b
 from common.geometry import normalize
 
 CLUE_NAMES = {
-    1: ["duration_s", "one_foot_s", "touchdowns", "sway", "wobble_s"],
+    1: [
+        "duration_s",
+        "one_foot_s",
+        "touchdowns",
+        "sway",
+        "wobble_s",
+        "hip_speed",
+        "neck_speed",
+        "lift_std",
+        "wrist_speed",
+    ],
     2: ["duration_s", "hops", "longest_pause_s", "touchdowns"],
     3: ["duration_s", "feet_gap_takeoff", "feet_gap_landing", "air_s", "jump_size"],
 }
@@ -53,40 +63,110 @@ STATES = {
     3: ("before", "air", "after"),
 }
 
-# Initial engineering guesses in seconds and torso lengths. See the task card.
-_JUMP_WINDOW_S = 0.4
-_MIN_AIR_S = 0.08
-_MAX_FRAME_GAP_S = 0.10
-_ANKLE_LIFT = 0.035
-_HIP_RISE = 0.12
+# Task 3 (standing long jump) thresholds in seconds and torso lengths.
+# Hybrid-C: chord baseline for airborne membership, validated by peak clearance above both
+# the chord and strict max(left_min, right_min) to reject flat->crouch phantom jumps.
+_JUMP_WINDOW_S = 0.45
+_MIN_AIR_S = 0.06
+_MAX_FRAME_GAP_S = 0.25
+_MAX_INTERP_GAP_S = 0.15
+_ANKLE_CHORD_LIFT = 0.04
+_HIP_CHORD_RISE = 0.08
+_PEAK_ANKLE_CHORD = 0.06
+_PEAK_ANKLE_MAX = 0.03
+_PEAK_HIP_MAX = 0.12
+_JUMP_END_WIN_S = 0.35
+_TIME_EPS = 1e-6  # avoids IEEE-754 boundary flips at exact fps multiples (e.g. 3/20 == 0.15 s)
+
+
+def _mid_hip_xy(p: np.ndarray) -> np.ndarray:
+    """Mid-hip (x, y) per frame, falling back to (L_HIP + R_HIP) / 2 when MID_HIP is NaN."""
+    hip = p[:, b.MID_HIP, :2].copy()
+    lr = p[:, [b.L_HIP, b.R_HIP], :2]
+    miss = (~np.isfinite(hip).all(axis=1)) & np.isfinite(lr).all(axis=(1, 2))
+    hip[miss] = 0.5 * (lr[miss, 0] + lr[miss, 1])
+    return hip
+
+
+def _interp_short_gaps(values: np.ndarray, t: np.ndarray, max_gap_s: float) -> np.ndarray:
+    """Linearly interpolate interior NaN runs whose bounding valid frames are <= max_gap_s apart."""
+    out = values.copy()
+    ok = np.flatnonzero(np.isfinite(out))
+    for a, b_idx in zip(ok, ok[1:], strict=False):
+        if b_idx > a + 1 and t[b_idx] - t[a] <= max_gap_s + _TIME_EPS:
+            out[a + 1 : b_idx] = np.interp(t[a + 1 : b_idx], [t[a], t[b_idx]], [out[a], out[b_idx]])
+    return out
+
+
+def _window_median(
+    series: np.ndarray, mask: np.ndarray, fallback_idx: int, *, positive: bool = False
+) -> float | None:
+    """Median of finite (and optionally > 0) samples in mask, falling back to a single frame."""
+    vals = series[mask]
+    ok = np.isfinite(vals) & (vals > 0) if positive else np.isfinite(vals)
+    if np.any(ok):
+        return float(np.median(vals[ok]))
+    fb = float(series[fallback_idx])
+    if np.isfinite(fb) and (not positive or fb > 0):
+        return fb
+    return None
 
 
 def _task3_events(p: np.ndarray, t: np.ndarray) -> list[dict]:
-    """Find short two-foot lifts relative to nearby poses on either side."""
-    ankles = p[:, [b.R_ANKLE, b.L_ANKLE], 1]
-    hip = p[:, b.MID_HIP, 1]
-    signals = np.column_stack((ankles, hip))
+    """Find short two-foot lifts relative to nearby grounded poses on either side."""
+    ankles = p[:, [b.R_ANKLE, b.L_ANKLE], 1].copy()
+    hip_y = _mid_hip_xy(p)[:, 1]
+    signals = np.column_stack((ankles, hip_y))
+    time_cuts = np.flatnonzero(np.diff(t) > _MAX_FRAME_GAP_S + _TIME_EPS) + 1
+    for sec in np.split(np.arange(len(t)), time_cuts):
+        for col in range(3):
+            signals[sec, col] = _interp_short_gaps(signals[sec, col], t[sec], _MAX_INTERP_GAP_S)
+
     valid = np.isfinite(signals).all(axis=1)
     airborne = np.zeros(len(t), dtype=bool)
     states = np.full(len(t), UNKNOWN, dtype=object)
-    cuts = np.flatnonzero((np.diff(t) > _MAX_FRAME_GAP_S) | (valid[:-1] != valid[1:])) + 1
+    lift_chord = np.full((len(t), 3), -np.inf)
+    lift_max = np.full((len(t), 3), -np.inf)
+    cuts = (
+        np.flatnonzero((np.diff(t) > _MAX_FRAME_GAP_S + _TIME_EPS) | (valid[:-1] != valid[1:])) + 1
+    )
+    cols = np.arange(3)
     for section in np.split(np.arange(len(t)), cuts):
         if not valid[section[0]]:
             continue
         lo, hi = int(section[0]), int(section[-1]) + 1
         for i in range(lo + 1, hi - 1):
-            left = max(lo, np.searchsorted(t, t[i] - _JUMP_WINDOW_S))
-            right = min(hi, np.searchsorted(t, t[i] + _JUMP_WINDOW_S, side="right"))
+            left = max(lo, int(np.searchsorted(t, t[i] - _JUMP_WINDOW_S - _TIME_EPS)))
+            right = min(
+                hi, int(np.searchsorted(t, t[i] + _JUMP_WINDOW_S + _TIME_EPS, side="right"))
+            )
             if left == i or right == i + 1:
                 continue
-            floor = np.maximum(signals[left:i].min(axis=0), signals[i + 1 : right].min(axis=0))
-            lift = signals[i] - floor
-            airborne[i] = bool((lift[:2] >= _ANKLE_LIFT).all() and lift[2] >= _HIP_RISE)
+            l_idx = left + np.argmin(signals[left:i], axis=0)
+            r_idx = (i + 1) + np.argmin(signals[i + 1 : right], axis=0)
+            l_min = signals[l_idx, cols]
+            r_min = signals[r_idx, cols]
+            weight = (t[i] - t[l_idx]) / (t[r_idx] - t[l_idx])
+            chord = l_min + (r_min - l_min) * weight
+            lc = signals[i] - chord
+            lm = signals[i] - np.maximum(l_min, r_min)
+            lift_chord[i] = lc
+            lift_max[i] = lm
+            airborne[i] = bool((lc[:2] >= _ANKLE_CHORD_LIFT).all() and lc[2] >= _HIP_CHORD_RISE)
 
         changes = np.flatnonzero(np.diff(airborne[lo:hi], prepend=False, append=False))
         for start, end in changes.reshape(-1, 2):
-            if t[lo + end] - t[lo + start] < _MIN_AIR_S:
-                airborne[lo + start : lo + end] = False
+            s, e = lo + int(start), lo + int(end)
+            if t[e] - t[s] < _MIN_AIR_S - _TIME_EPS:
+                airborne[s:e] = False
+                continue
+            pk_ac = float(lift_chord[s:e, :2].min(axis=1).max())
+            pk_am = float(lift_max[s:e, :2].min(axis=1).max())
+            pk_hm = float(lift_max[s:e, 2].max())
+            if not (
+                pk_ac >= _PEAK_ANKLE_CHORD and pk_am >= _PEAK_ANKLE_MAX and pk_hm >= _PEAK_HIP_MAX
+            ):
+                airborne[s:e] = False
 
     has_jump = airborne.any()
     if has_jump:
@@ -100,7 +180,7 @@ def _task3_events(p: np.ndarray, t: np.ndarray) -> list[dict]:
     for end in range(1, len(t) + 1):
         if end == len(t):
             end_s = t[-1]
-        elif t[end] - t[end - 1] > _MAX_FRAME_GAP_S:
+        elif t[end] - t[end - 1] > _MAX_FRAME_GAP_S + _TIME_EPS:
             end_s = t[end - 1]
         elif states[end] != states[start]:
             end_s = t[end]
@@ -129,18 +209,56 @@ def _task3_clues(p: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[str, 
             continue
         if after["state"] != "after":
             continue
-        takeoff = np.searchsorted(t, air["start_s"]) - 1
-        landing = np.searchsorted(t, air["end_s"])
+        takeoff = int(np.searchsorted(t, air["start_s"])) - 1
+        landing = int(np.searchsorted(t, air["end_s"]))
         boundary = p[[takeoff, landing]]
         gaps = np.linalg.norm(boundary[:, b.R_ANKLE, :2] - boundary[:, b.L_ANKLE, :2], axis=1)
         widths = np.linalg.norm(boundary[:, b.R_HIP, :2] - boundary[:, b.L_HIP, :2], axis=1)
         for key, gap, width in zip(CLUE_NAMES[3][1:3], gaps, widths, strict=True):
             if np.isfinite(gap) and np.isfinite(width) and width > 0:
                 out[key] = float(gap / width)
-        out["air_s"] = air["end_s"] - air["start_s"]
-        hips = boundary[:, b.MID_HIP, 0]
-        if np.isfinite(hips).all():
-            out["jump_size"] = float(abs(hips[1] - hips[0]))
+        out["air_s"] = float(air["end_s"] - air["start_s"])
+
+        pre = (t >= max(before["start_s"], air["start_s"] - _JUMP_END_WIN_S) - _TIME_EPS) & (
+            t < air["start_s"]
+        )
+        is_last = i + 1 == len(events) - 1
+        end_idx = int(np.searchsorted(t, after["end_s"]))
+        gap_after = (
+            not is_last
+            and events[i + 2]["state"] == UNKNOWN
+            and end_idx + 1 < len(t)
+            and t[end_idx] == after["end_s"]
+            and t[end_idx + 1] == events[i + 2]["end_s"]
+            and t[end_idx + 1] - t[end_idx] > _MAX_FRAME_GAP_S + _TIME_EPS
+        )
+        in_after = (t >= air["end_s"]) & (
+            t <= after["end_s"] if (is_last or gap_after) else t < after["end_s"]
+        )
+        post = in_after & (t <= air["end_s"] + _JUMP_END_WIN_S + _TIME_EPS)
+
+        hip_xy = _mid_hip_xy(p)
+        hx_pre = _window_median(hip_xy[:, 0], pre, takeoff)
+        hx_post = _window_median(hip_xy[:, 0], post, landing)
+        dx = abs(hx_post - hx_pre) if hx_pre is not None and hx_post is not None else 0.0
+
+        ankles_y = p[:, [b.R_ANKLE, b.L_ANKLE], 1]
+        both_ankles = np.isfinite(ankles_y).all(axis=1)
+        foot_y = np.where(both_ankles, 0.5 * (ankles_y[:, 0] + ankles_y[:, 1]), np.nan)
+        fy_pre = _window_median(foot_y, pre, takeoff)
+        fy_post = _window_median(foot_y, post, landing)
+        dy = fy_pre - fy_post if fy_pre is not None and fy_post is not None else 0.0
+
+        torso = np.linalg.norm(p[:, b.NECK, :2] - hip_xy, axis=1)
+        torso_pre = _window_median(torso, pre, takeoff, positive=True)
+        torso_post = _window_median(torso, post, landing, positive=True)
+        scale_gain = (
+            torso_post / torso_pre - 1.0
+            if torso_pre is not None and torso_post is not None
+            else 0.0
+        )
+
+        out["jump_size"] = float(np.hypot(dx, 1.5 * max(0.0, dy) + 2.5 * max(0.0, scale_gain)))
         break
     return out
 
@@ -246,13 +364,27 @@ def _merge_short(runs: list[list], t: np.ndarray, min_s: float) -> list[list]:
     return runs
 
 
+def _smoothed_speed_1d(x: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Double-smoothed 1D speed |dx/dt| in torso lengths per second."""
+    pos = _smooth(_fill_nan(x), t, SMOOTH_S)
+    speed = np.abs(np.gradient(pos, t)) if len(t) > 1 else np.zeros(len(t))
+    return _smooth(speed, t, SMOOTH_S)
+
+
+def _smoothed_speed_2d(xy: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """2D speed hypot(vx, vy) of a smoothed trajectory, in torso lengths per second."""
+    if len(t) <= 1:
+        return np.zeros(len(t))
+    sx = _smooth(_fill_nan(xy[:, 0]), t, SMOOTH_S)
+    sy = _smooth(_fill_nan(xy[:, 1]), t, SMOOTH_S)
+    return np.hypot(np.gradient(sx, t), np.gradient(sy, t))
+
+
 def _frame_states_task1(q: np.ndarray, t: np.ndarray) -> tuple[list[str], np.ndarray]:
     yl = _foot_height(q, b.L_ANKLE, b.L_HEEL)
     yr = _foot_height(q, b.R_ANKLE, b.R_HEEL)
     gap = np.abs(yl - yr)
-    hip_x = _smooth(_fill_nan(q[:, b.MID_HIP, 0]), t, SMOOTH_S)
-    speed = np.abs(np.gradient(hip_x, t)) if len(t) > 1 else np.zeros(len(t))
-    speed = _smooth(speed, t, SMOOTH_S)
+    speed = _smoothed_speed_1d(q[:, b.MID_HIP, 0], t)
     states = []
     for g, v in zip(gap, speed, strict=True):
         if np.isnan(g):
@@ -305,8 +437,8 @@ def _timeline_task1(points: np.ndarray, t: np.ndarray) -> list[dict]:
 
 
 def _clues_task1(points: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[str, float]:
-    """Every clue comes from the timeline, except sway, which needs the hip inside the
-    longest one-foot stretch that the timeline marks."""
+    """Every clue comes from the timeline, except sway and the core stagger clues, which are
+    measured inside the longest one-foot stretch that the timeline marks."""
     out = {name: 0.0 for name in CLUE_NAMES[1]}
     out["duration_s"] = _duration(t)
 
@@ -336,6 +468,33 @@ def _clues_task1(points: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[
     if hip_x.size >= 2:
         lo, hi = np.percentile(hip_x, [5, 95])
         out["sway"] = float(hi - lo)
+
+    # Trimmed core inside the longest one-foot stretch to exclude lift-up / foot-down transients.
+    t0, t1 = longest
+    trim = min(0.2, 0.15 * (t1 - t0))
+    core = (t >= t0 + trim) & (t <= t1 - trim)
+    if int(core.sum()) < 4:
+        core = inside
+    if int(core.sum()) >= 2:
+        if np.isfinite(q[core, b.MID_HIP, 0]).sum() >= 2:
+            out["hip_speed"] = float(np.median(_smoothed_speed_1d(q[:, b.MID_HIP, 0], t)[core]))
+        if np.isfinite(q[core, b.NECK, 0]).sum() >= 2:
+            out["neck_speed"] = float(np.median(_smoothed_speed_1d(q[:, b.NECK, 0], t)[core]))
+        yl = _foot_height(q, b.L_ANKLE, b.L_HEEL)
+        yr = _foot_height(q, b.R_ANKLE, b.R_HEEL)
+        gap_core = np.abs(yl[core] - yr[core])
+        gap_core = gap_core[np.isfinite(gap_core)]
+        if gap_core.size >= 2:
+            out["lift_std"] = float(np.std(gap_core))
+        wrist_p90: list[float] = []
+        for w_idx in (b.L_WRIST, b.R_WRIST):
+            ok_w = np.isfinite(q[core, w_idx, 0]) & np.isfinite(q[core, w_idx, 1])
+            if ok_w.sum() >= 2:
+                wrist_p90.append(
+                    float(np.percentile(_smoothed_speed_2d(q[:, w_idx, :2], t)[core], 90))
+                )
+        if wrist_p90:
+            out["wrist_speed"] = float(np.mean(wrist_p90))
     return out
 
 
@@ -360,9 +519,11 @@ HOP_LIFT = 0.3
 # the floor line drifts as the child hops toward the camera). Task 1's "ankles level" fails here:
 # in the air the hopping foot rises level with the lifted one.
 FLOOR_WIN_S = 1.0
-# Two hops further apart than this have a pause between them (normal rhythm in B054: about 0.35 s;
-# start value, tune by eye).
-PAUSE_GAP_S = 0.7
+# Two hops further apart than this have a pause between them (normal child hop cadence is
+# ~0.37-0.40 s; troughs before/after each peak are bounded within HALF_HOP_S so a pause is
+# not absorbed into the neighbouring hop).
+HALF_HOP_S = 0.25
+PAUSE_GAP_S = 0.45
 
 _HOP, _PAUSE = "hop", "pause"
 
@@ -424,10 +585,11 @@ def _timeline_task2(points: np.ndarray, t: np.ndarray) -> list[dict]:
         if not peaks:
             spans.append((i0, _PAUSE))
             continue
-        # low point before each peak (bounded by the previous peak and the stretch start)
+        # low point before each peak (bounded by HALF_HOP_S, previous peak, and stretch start)
         starts = []
         for k, pk in enumerate(peaks):
-            lo = peaks[k - 1] + 1 if k else i0
+            lo_bound = int(np.searchsorted(t, t[pk] - HALF_HOP_S, side="left"))
+            lo = max(peaks[k - 1] + 1 if k else i0, lo_bound)
             starts.append(lo + int(np.argmin(fast[lo : pk + 1])))
         if starts[0] > i0:
             spans.append((i0, _PAUSE))
@@ -436,8 +598,9 @@ def _timeline_task2(points: np.ndarray, t: np.ndarray) -> list[dict]:
             nxt_peak = peaks[k + 1] if k + 1 < len(peaks) else None
             if nxt_peak is None or t[nxt_peak] - t[pk] > PAUSE_GAP_S:
                 hi = starts[k + 1] if nxt_peak is not None else i1 + 1
-                after = pk + int(np.argmin(fast[pk:hi])) if hi > pk else pk
-                if after + 1 < hi:
+                hi_hop = min(hi, int(np.searchsorted(t, t[pk] + HALF_HOP_S, side="right")))
+                after = pk + int(np.argmin(fast[pk:hi_hop])) if hi_hop > pk else pk
+                if after + 1 < hi and after + 1 < len(t) - 1:
                     spans.append((after + 1, _PAUSE))
 
     events = []
@@ -455,10 +618,16 @@ def _clues_task2(t: np.ndarray, events: list[dict]) -> dict[str, float]:
     # longest time between two hops: from a hop's end to the next hop's start (pauses, both feet)
     gaps = [b_["start_s"] - a["end_s"] for a, b_ in zip(hops, hops[1:], strict=False)]
     out["longest_pause_s"] = float(max(gaps)) if gaps else 0.0
-    # the lifted foot came down and went up again: both_feet between two one-foot stretches
-    on = [e["state"] in (_HOP, _PAUSE) for e in events]
-    stretches = sum(1 for k, x in enumerate(on) if x and (k == 0 or not on[k - 1]))
-    out["touchdowns"] = float(max(stretches - 1, 0))
+    # touch-downs between hops: both_feet events between the first hop's end and last hop's start
+    if len(hops) >= 2:
+        t_start, t_end = hops[0]["end_s"], hops[-1]["start_s"]
+        out["touchdowns"] = float(
+            sum(
+                1
+                for e in events
+                if e["state"] == _BOTH and e["start_s"] >= t_start and e["end_s"] <= t_end
+            )
+        )
     return out
 
 
@@ -478,20 +647,28 @@ def timeline(task: int, points: np.ndarray, t: np.ndarray) -> list[dict]:
     return _whole(t)
 
 
-def compute(task: int, points: np.ndarray, t: np.ndarray) -> dict[str, float]:
+def timeline_and_compute(
+    task: int, points: np.ndarray, t: np.ndarray
+) -> tuple[list[dict], dict[str, float]]:
+    """Compute the moment timeline once and derive all clues for the task from it."""
     if task not in CLUE_NAMES:
         raise ValueError("task must be 1, 2 or 3")
     if task == 3:
         p = _task3_pose(points)
-        return _task3_clues(p, t, _task3_events(p, t))
+        events = _task3_events(p, t)
+        return events, _task3_clues(p, t, events)
     events = timeline(task, points, t)
     if task == 1:
-        return _clues_task1(points, t, events)
+        return events, _clues_task1(points, t, events)
     if task == 2:
-        return _clues_task2(t, events)
+        return events, _clues_task2(t, events)
     out = {name: 0.0 for name in CLUE_NAMES[task]}
     out["duration_s"] = _duration(t)
-    return out
+    return events, out
+
+
+def compute(task: int, points: np.ndarray, t: np.ndarray) -> dict[str, float]:
+    return timeline_and_compute(task, points, t)[1]
 
 
 MAX_MOMENTS = 4  # moments named in one reason text; the full timeline is in the try's JSON

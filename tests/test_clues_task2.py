@@ -62,3 +62,63 @@ def test_clues_do_not_depend_on_pixels():
     big = p.copy()
     big[..., :2] *= 1.5
     assert compute(2, p, t) == compute(2, big, t)
+
+
+def test_mid_sequence_06s_pause_is_detected():
+    """A 0.6 s pause between hops must show up as a pause event and longest_pause_s > 0.2."""
+    p, t = _hops(4, 4.0, pause_after=1, pause_s=0.6)
+    c = compute(2, p, t)
+    assert c["hops"] == 4.0
+    assert c["longest_pause_s"] > 0.2
+    assert "pause" in {e["state"] for e in timeline(2, p, t)}
+
+
+def test_stray_pre_and_post_hop_foot_lifts_do_not_count_as_touchdowns():
+    """Foot lifts / both-feet spans before the first hop or after the last hop are not
+    touch-downs between hops."""
+    p, t = _hops(3, 5.0, hop_s=0.4, start=1.8)
+    # Put right foot down before the hops (0.8-1.5 s) and after the hops (3.3-4.0 s),
+    # leaving stray non-hop one-foot lifts at 0.0-0.8 s and 4.0-5.0 s.
+    down = ((t >= 0.8) & (t < 1.5)) | ((t >= 3.3) & (t < 4.0))
+    for i_r, i_l in zip(b.RIGHT_FOOT + [b.R_KNEE], b.LEFT_FOOT + [b.L_KNEE], strict=True):
+        p[down, i_r, 1] = p[down, i_l, 1]
+    c = compute(2, p, t)
+    assert c["hops"] == 3.0
+    assert c["touchdowns"] == 0.0
+
+
+def test_touchdown_between_hops_is_counted():
+    """Putting the lifted foot down between hops counts as a touchdown."""
+    p, t = _hops(4, 4.5, hop_s=0.4, start=0.5, pause_after=1, pause_s=0.9)
+    # Put the lifted foot down during the 0.9 s gap between hop 2 and hop 3 (1.3-2.2 s).
+    down = (t >= 1.45) & (t < 2.05)
+    for i_r, i_l in zip(b.RIGHT_FOOT + [b.R_KNEE], b.LEFT_FOOT + [b.L_KNEE], strict=True):
+        p[down, i_r, 1] = p[down, i_l, 1]
+    c = compute(2, p, t)
+    assert c["hops"] == 4.0
+    assert c["touchdowns"] == 1.0
+
+
+def test_single_hop_always_has_zero_touchdowns():
+    """With <= 1 hop there are no hops on both sides of a touchdown, so touchdowns == 0."""
+    p, t = _hops(1, 4.0, hop_s=0.4, start=1.8)
+    down = ((t >= 0.7) & (t < 1.4)) | ((t >= 2.5) & (t < 3.2))
+    for i_r, i_l in zip(b.RIGHT_FOOT + [b.R_KNEE], b.LEFT_FOOT + [b.L_KNEE], strict=True):
+        p[down, i_r, 1] = p[down, i_l, 1]
+    c = compute(2, p, t)
+    assert c["hops"] == 1.0
+    assert c["touchdowns"] == 0.0
+
+
+def test_hop_ending_near_clip_end_emits_no_zero_duration_trailing_pause():
+    """A hop whose post-peak trough lands near the final frame must not emit a 0-second pause."""
+    p, t = _hops(3, 2.0, hop_s=0.4, start=0.5)
+    # Trim the clip right after the 3rd hop's landing trough so after + 1 would hit len(t) - 1.
+    keep = t <= 1.72
+    p_cut, t_cut = p[keep], t[keep]
+    ev = timeline(2, p_cut, t_cut)
+    c = compute(2, p_cut, t_cut)
+    assert c["hops"] == 3.0
+    assert c["longest_pause_s"] == 0.0
+    assert all(e["end_s"] > e["start_s"] for e in ev)
+    assert "pause at" not in explain(2, c, ev)

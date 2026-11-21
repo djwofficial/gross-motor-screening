@@ -24,7 +24,7 @@ import numpy as np
 
 from app.session import Session
 from common.format import Try
-from features.clues import compute, explain, timeline
+from features.clues import explain, timeline_and_compute
 from live.convert import halpe_to_body25
 from live.pose import FakePoseStream
 from live.segment import Segmenter
@@ -35,11 +35,16 @@ from model.task_classifier import predict_task
 PRE_ROLL_S = 0.5  # keep this much before the detected start
 
 
+def _score_try_with_events(tr: Try, task: int) -> tuple[dict, int, float, str, list[dict]]:
+    events, clues = timeline_and_compute(task, tr.points, tr.t)
+    score, confidence = predict(task, clues)
+    return clues, score, confidence, explain(task, clues, events), events
+
+
 def score_try(tr: Try, task: int) -> tuple[dict, int, float, str]:
     """Clues, score, confidence and reason text for one try (also used by rescore.py)."""
-    clues = compute(task, tr.points, tr.t)
-    score, confidence = predict(task, clues)
-    return clues, score, confidence, explain(task, clues, timeline(task, tr.points, tr.t))
+    clues, score, confidence, reasons, _events = _score_try_with_events(tr, task)
+    return clues, score, confidence, reasons
 
 
 def finish_try(
@@ -56,7 +61,7 @@ def finish_try(
     # Operator step (GUI: Enter confirms, 1/2/3 and L/R correct). In --fake mode we know the truth.
     task, leg = true_task, true_leg
     corrected = (guessed_task != task) or (task != 3 and guessed_leg != leg)
-    clues, score, confidence, reasons = score_try(tr, task)
+    clues, score, confidence, reasons, events = _score_try_with_events(tr, task)
     return session.save_try(
         tr,
         raw26=raw26,
@@ -70,7 +75,7 @@ def finish_try(
         confidence=confidence,
         clues=clues,
         reasons=reasons,
-        events=timeline(task, tr.points, tr.t),
+        events=events,
     )
 
 
@@ -135,6 +140,33 @@ def run_fake(args) -> list[Path]:
     return saved
 
 
+def pick_camera(candidates: tuple[int, ...] = (0, 1, 2), max_frames: int = 10) -> int:
+    """Return the first camera index producing non-black frames on macOS; 0 elsewhere.
+
+    On macOS, iPhone Continuity Camera can claim index 0 and return all-zero frames while
+    the built-in MacBook camera shifts to index 1.
+    """
+    if sys.platform != "darwin":
+        return 0
+    import time
+
+    import cv2
+
+    for idx in candidates:
+        cap = cv2.VideoCapture(idx)
+        try:
+            if not cap.isOpened():
+                continue
+            for _ in range(max_frames):
+                ok, frame = cap.read()
+                if ok and frame is not None and int(frame.max()) > 0:
+                    return idx
+                time.sleep(0.03)
+        finally:
+            cap.release()
+    return 0
+
+
 def _frame_size(stream) -> tuple[int, int]:
     """Read (width, height) from stream.cap, falling back to 1280x720."""
     cap = getattr(stream, "cap", None)
@@ -153,8 +185,13 @@ def run_live(args) -> list[Path]:
     from app.ui import run_gui
     from live.pose import PoseStream
 
-    source = args.video if args.video is not None else args.camera
-    source_name = os.fspath(args.video) if args.video is not None else f"camera:{args.camera}"
+    if args.video is not None:
+        source = args.video
+        source_name = os.fspath(args.video)
+    else:
+        cam = args.camera if args.camera is not None else pick_camera()
+        source = cam
+        source_name = f"camera:{cam}"
     device = args.device or ("cpu" if sys.platform == "darwin" else "cuda")
     pose_mode = args.pose_mode or ("lightweight" if sys.platform == "darwin" else "balanced")
     view = args.view or ("camera" if args.show_score else "stick")
@@ -179,7 +216,12 @@ def main(argv=None) -> int:
         description="Gross motor screening app (screening aid, not a diagnosis)"
     )
     ap.add_argument("--fake", action="store_true", help="use a fake try instead of the webcam")
-    ap.add_argument("--camera", type=int, default=0, help="webcam index for live mode")
+    ap.add_argument(
+        "--camera",
+        type=int,
+        default=None,
+        help="webcam index for live mode (auto-picked on Mac if omitted)",
+    )
     ap.add_argument("--video", type=Path, default=None, help="video file instead of a live webcam")
     ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
     ap.add_argument("--view", choices=["stick", "camera", "neutral"], default=None)
