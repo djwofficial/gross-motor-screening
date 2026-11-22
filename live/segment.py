@@ -15,8 +15,10 @@ Rules (agreed 2026-11-08):
     start  = clear movement, or the pose changes away from the ready pose (e.g. one foot lifted)
     end    = still again for about 1.5 s AND back in a both-feet-down pose (or lost for 1 s)
 
-This first version is a PLACEHOLDER that works on fake tries. Theresia tunes the thresholds on
-the 27 team clips and lists the misses. Units: torso lengths and seconds, never pixels (the one
+Tuned on the 27 adult team clips (docs/task_cards/team_clips_27_try.zip, 2026-11-22): standing
+on phone video measures 0.2-0.5 torso lengths per second, so still_speed went from 0.35 (guess)
+to 0.5. Per-clip table and misses: python -m live.segment --team-clips (task card
+docs/task_cards/theresia_2026-11-19_segment.md). Units: torso lengths and seconds, never pixels (the one
 exception is the start area, which is a place in the picture, in unmirrored pixels).
 """
 
@@ -38,7 +40,7 @@ class Segmenter:
         self,
         ready_still_s: float = 1.0,
         end_still_s: float = 1.5,
-        still_speed: float = 0.35,  # torso lengths per second
+        still_speed: float = 0.5,  # torso lengths per second (team clips, 2026-11-22)
         move_speed: float = 0.8,
         pose_tol: float = 0.25,  # torso lengths, largest point distance from the ready pose
         feet_tol: float = 0.15,  # torso lengths, ankle height difference for "both feet down"
@@ -138,8 +140,13 @@ class Segmenter:
                 self.state, self.rest = "ready", shape.copy()
             return self.state
         if self.state == "ready":
-            if speed > self.p["move_speed"] or (
-                off_rest is not None and off_rest > self.p["pose_tol"]
+            # a slow lift stays under move_speed and the ready pose would follow it, so a foot
+            # coming off the floor is a start of its own (team clips folder1_Move_1_clip3,
+            # folder3_Move_1_clip1)
+            if (
+                speed > self.p["move_speed"]
+                or (off_rest is not None and off_rest > self.p["pose_tol"])
+                or not self._feet_down(shape)
             ):
                 self.state = "recording"
                 return "start"
@@ -157,3 +164,130 @@ class Segmenter:
             self.still_since = None
             return "end"
         return "recording"
+
+
+# ---------------------------------------------------------------- checking on recorded clips
+
+TAIL_S = 2.0  # seconds added after a clip to test the end (the team clips stop right after moving)
+MATCH_S = 0.5  # a start this close to the first movement in features.clues.timeline counts as found
+_NOT_MOVING = ("unknown", "both_feet", "before", "after")
+
+
+def run(points, t, **kw) -> list[str]:
+    """Events of a fresh Segmenter(**kw) for frames points (T, 25, 3) or a list with None."""
+    seg = Segmenter(**kw)
+    return [seg.update(p, float(ti)) for p, ti in zip(points, t, strict=True)]
+
+
+def with_tail(points, t, how: str, tail_s: float = TAIL_S, fps: float = 30.0):
+    """SIMULATED end of a clip: 'hold' = the last pose stays still, 'leave' = nobody in picture."""
+    n = int(round(tail_s * fps))
+    tt = float(t[-1]) + np.arange(1, n + 1) / fps
+    extra = [points[-1]] * n if how == "hold" else [None] * n
+    return list(points) + extra, np.concatenate([np.asarray(t, float), tt])
+
+
+def first_movement(task: int, points, t) -> float | None:
+    """Second of the first lift, hop or jump in features.clues.timeline (Louise), or None."""
+    from features.clues import timeline
+
+    moving = [e for e in timeline(task, points, t) if e["state"] not in _NOT_MOVING]
+    return float(moving[0]["start_s"]) if moving else None
+
+
+def check_clip(points, t, task: int, **kw) -> dict:
+    """Start and end on one recorded try, with a reason for each miss."""
+    t = np.asarray(t, float)
+    move = first_movement(task, points, t)
+    ev = run(points, t, **kw)
+    row = {"move_s": move, "starts": ev.count("start"), "start_s": None, "start": False}
+    if "start" in ev:
+        row["start_s"] = float(t[ev.index("start")])
+    if "ready" not in ev and "start" not in ev:
+        row["start_why"] = "never ready: not still with both feet down for 1 s before moving"
+    elif "start" not in ev:
+        row["start_why"] = "ready, but no start"
+    elif ev.count("start") > 1:
+        row["start_why"] = f"{ev.count('start')} starts"
+    elif move is None or abs(row["start_s"] - move) > MATCH_S:
+        mv = "none" if move is None else f"{move:.2f} s"
+        row["start_why"] = f"start at {row['start_s']:.2f} s, first movement at {mv}"
+    else:
+        row["start"], row["start_why"] = True, ""
+    i0 = ev.index("start") if "start" in ev else None
+    for how in ("clip", "hold", "leave"):
+        if how == "clip":
+            e2 = ev
+        else:
+            e2 = run(*with_tail(points, t, how), **kw)
+        found = i0 is not None and "end" in e2[i0:]
+        row[f"end_{how}"] = found
+    if i0 is None:
+        row["end_why"] = "no start"
+    elif not row["end_hold"]:
+        seg = Segmenter(**kw)
+        f = seg._features(points[-1])
+        if f is None:
+            row["end_why"] = "last frame: legs not found"
+        elif not seg._feet_down(f[1]):
+            row["end_why"] = "clip stops with one foot up (try not over)"
+        else:
+            row["end_why"] = "last pose differs from the ready pose"
+    else:
+        row["end_why"] = ""
+    return row
+
+
+def check_team_clips(zip_path, **kw) -> list[dict]:
+    """check_clip on every try in the team clips zip (task from manifest.csv)."""
+    import csv
+    import io
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    from common.format import load
+
+    rows = []
+    with zipfile.ZipFile(zip_path) as z, tempfile.TemporaryDirectory() as tmp:
+        manifest = list(csv.DictReader(io.TextIOWrapper(z.open("manifest.csv"), "utf-8-sig")))
+        for m in manifest:
+            z.extract(m["try_file"], tmp)
+            tr = load(Path(tmp) / m["try_file"])
+            row = check_clip(tr.points, tr.t, int(m["task"]), **kw)
+            rows.append({"clip": Path(m["try_file"]).stem, "task": int(m["task"]), **row})
+    return rows
+
+
+def _main(argv=None) -> int:
+    import argparse
+    from pathlib import Path
+
+    ap = argparse.ArgumentParser(description="Automatic start/end on the team clips")
+    default = Path(__file__).resolve().parents[1] / "docs/task_cards/team_clips_27_try.zip"
+    ap.add_argument("--team-clips", type=Path, nargs="?", const=default, default=default)
+    args = ap.parse_args(argv)
+    rows = check_team_clips(args.team_clips)
+    print("clip                    task  move_s start_s  start  end: clip hold leave  miss")
+    for r in rows:
+        why = "; ".join(w for w in (r["start_why"], r["end_why"]) if w)
+        mv = "-" if r["move_s"] is None else f"{r['move_s']:.2f}"
+        st = "-" if r["start_s"] is None else f"{r['start_s']:.2f}"
+        yn = {True: "yes", False: "no"}
+        print(
+            f"{r['clip']:<24}{r['task']:>4}  {mv:>6} {st:>7}  {yn[r['start']]:>5}"
+            f"  {yn[r['end_clip']]:>9} {yn[r['end_hold']]:>4} {yn[r['end_leave']]:>5}  {why}"
+        )
+    n = len(rows)
+    print(
+        f"start found {sum(r['start'] for r in rows)}/{n}; end found in the clip itself "
+        f"{sum(r['end_clip'] for r in rows)}/{n}, with a SIMULATED 2 s tail: still "
+        f"{sum(r['end_hold'] for r in rows)}/{n}, leaving {sum(r['end_leave'] for r in rows)}/{n}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(_main())
