@@ -13,7 +13,8 @@ import numpy as np
 import pytest
 
 from common.format import load, make_fake_try
-from live.quality import FEET, NOBODY, check
+from live.quality import NOBODY, check
+from live.start_area import FEET
 
 ZIP = Path(__file__).resolve().parents[1] / "docs" / "task_cards" / "team_clips_27_try.zip"
 WINDOW = 45  # 1.5 s at 30 fps, as the app's readiness window
