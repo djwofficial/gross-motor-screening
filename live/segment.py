@@ -10,12 +10,14 @@ Shared interface (final, change only through Daryn):
     seg.reset()
 
 Rules (agreed 2026-11-08):
-    ready  = standing still with both feet down for about 1 s
+    ready  = standing still with both feet down for about 1 s (and, when a start area is given,
+             with the feet in it: Segmenter(start_area=live.start_area.load(frame_size=...)))
     start  = clear movement, or the pose changes away from the ready pose (e.g. one foot lifted)
     end    = still again for about 1.5 s AND back in a both-feet-down pose (or lost for 1 s)
 
 This first version is a PLACEHOLDER that works on fake tries. Theresia tunes the thresholds on
-the 27 team clips and lists the misses. Units: torso lengths and seconds, never pixels.
+the 27 team clips and lists the misses. Units: torso lengths and seconds, never pixels (the one
+exception is the start area, which is a place in the picture, in unmirrored pixels).
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from collections import deque
 import numpy as np
 
 from common import body25 as b
+from live.start_area import feet_inside
 
 EVENTS = ("idle", "ready", "start", "recording", "end")
 _LEG = [b.MID_HIP, b.R_HIP, b.R_KNEE, b.R_ANKLE, b.L_HIP, b.L_KNEE, b.L_ANKLE]
@@ -42,6 +45,7 @@ class Segmenter:
         lost_s: float = 1.0,
         window_s: float = 0.4,  # speed = change between the older and newer half of this window
         min_score: float = 0.3,
+        start_area=None,  # (x0, y0, x1, y1) unmirrored pixels, from live.start_area.load
     ):
         self.p = dict(locals())
         self.p.pop("self")
@@ -71,6 +75,11 @@ class Segmenter:
     def _feet_down(self, shape) -> bool:
         ly, ry = shape[_LEG.index(b.L_ANKLE), 1], shape[_LEG.index(b.R_ANKLE), 1]
         return abs(ly - ry) < self.p["feet_tol"]
+
+    def _in_area(self, points) -> bool:
+        """No start area set, or the found foot points are in it."""
+        area = self.p["start_area"]
+        return area is None or feet_inside(points, area, self.p["min_score"]) is not False
 
     def _speed(self, t: float) -> float:
         """Torso lengths per second between the mean of the older and newer half of the window
@@ -121,7 +130,11 @@ class Segmenter:
         )
 
         if self.state == "idle":
-            if still_for >= self.p["ready_still_s"] and self._feet_down(shape):
+            if (
+                still_for >= self.p["ready_still_s"]
+                and self._feet_down(shape)
+                and self._in_area(points)
+            ):
                 self.state, self.rest = "ready", shape.copy()
             return self.state
         if self.state == "ready":

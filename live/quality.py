@@ -30,6 +30,7 @@ from __future__ import annotations
 import numpy as np
 
 from common import body25 as b
+from live.start_area import feet_inside
 
 MIN_FPS = 15.0  # guess: the clue timings need about 15 or more frames per second
 MIN_SCORE = 0.3  # a point with a lower score counts as not found
@@ -38,9 +39,6 @@ MIN_MEAN_SCORE = 0.5  # guess: team clips in normal light average 0.87-0.92
 MIN_BODY_FRAC = 0.25  # guess: body (head to feet) shorter than this part of the picture = too far
 EDGE = 0.02  # a point closer than 2% of the picture size to an edge counts as cut off
 MAX_EDGE_FRAC = 0.05  # more than 5% of the found points at an edge = body cut off
-MIN_IN_AREA = 0.8  # at least 80% of the found foot points must be inside the start area
-
-FEET = b.LEFT_FOOT + b.RIGHT_FOOT  # ankles, toes, heels
 _MUST_SEE = {
     "head": [b.NOSE],
     "shoulders": [b.R_SHOULDER, b.L_SHOULDER],
@@ -131,18 +129,10 @@ def check(
             "or the picture blurry. Turn on more light or open the curtains."
         )
 
-    # start area: every foot point that was found (not-found points don't count as outside)
-    if start_area is not None:
-        x0, y0, x1, y1 = (float(v) for v in start_area)
-        x0, x1 = min(x0, x1), max(x0, x1)
-        y0, y1 = min(y0, y1), max(y0, y1)
-        f_seen = seen[:, FEET]
-        if np.any(f_seen):
-            fx, fy = xy[:, FEET, 0], xy[:, FEET, 1]
-            inside = (fx >= x0) & (fx <= x1) & (fy >= y0) & (fy <= y1)
-            if inside[f_seen].mean() < MIN_IN_AREA:
-                problems.append(
-                    "The feet are not in the start area (the taped area). "
-                    "Ask the child to stand on the tape."
-                )
+    # start area (live/start_area.py): only foot points that were found count
+    if start_area is not None and feet_inside(p, start_area, min_score) is False:
+        problems.append(
+            "The feet are not in the start area (the taped area). "
+            "Ask the child to stand on the tape."
+        )
     return problems
