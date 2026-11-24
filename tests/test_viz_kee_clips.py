@@ -54,6 +54,7 @@ def test_choose_spreads_tasks_and_scores(fake_zip):
             (t, json.loads(z.read(n))["label_index"]) for n, t in zip(names, tasks, strict=True)
         }
     assert len(cells) == 9  # every task x score
+    assert sorted(tasks.count(t) for t in (1, 2, 3)) == [6, 7, 7]  # extras in different tasks
 
 
 def test_clips_hide_the_score(fake_zip, tmp_path):

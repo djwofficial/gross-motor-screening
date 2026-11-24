@@ -22,16 +22,21 @@ task number: no child code, file name or score (`viz.replay.render` with a strip
 
 **Done when:** 20 mp4 files and a separate answer key.
 
-**Result so far (2026-11-24):** `tests/test_viz_kee_clips.py` (3 tests) builds a fake zip in the
-group B format. It checks 20 clips from 20 different children covering all 9 task × score cells,
-the shuffled clip names, that the answer key matches the clips and sits outside `clips/`, and that
-the clip meta has no label or child. The real run is waiting for `B_skel.zip` on this laptop.
+**Result (2026-11-24):** `tests/test_viz_kee_clips.py` (3 tests) builds a fake zip in the group B
+format. It checks 20 clips from 20 different children covering all 9 task × score cells, the 2
+extras going to different tasks, the shuffled clip names, that the answer key matches the clips
+and sits outside `clips/`, and that the clip meta has no label or child.
 
-**Spread of the real 20 (fill in after the run, from the script's output):**
+Real run: `B_skel.zip` downloaded from the official GigaDB link (211,959,553 bytes,
+`python -m zipfile -t` passed). `python -m viz.kee_clips --zip data/raw/B_skel.zip --out
+runs/kee_practice` wrote 20 mp4 files (81-298 frames, 2.7-9.9 s), `answer_key.csv` and a blank
+`kee_practice.csv`. Spread of the 20 (from the script's output; which clip has which score stays
+in the answer key):
+
 | Task | 0 Bad | 1 Good | 2 Perfect |
 |---|---|---|---|
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
+| 1 stand on one leg | 2 | 2 | 3 |
+| 2 hop on one leg | 2 | 2 | 2 |
+| 3 long jump | 2 | 2 | 3 |
 
 **Watch out:** `*.mp4` is gitignored; share the clips outside git. Group B only.

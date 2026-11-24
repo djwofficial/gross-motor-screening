@@ -8,7 +8,8 @@ writes
 
 - Group B only (CC0 dataset, Kim et al. 2023): no child from our testing day is ever in here.
 - Spread over the 3 tasks and the 3 scores: 2 clips per task x score (18), plus 2 more so there
-  are 20 (the most common cells first). One camera per attempt, at most one clip per child.
+  are 20 (each from a different task, the most common score of that task). One camera per
+  attempt, at most one clip per child.
 - The clip shows only the stick figure, the time and the task number: no child code, no file
   name, no score. Clip numbers are shuffled, so the order says nothing about the score.
 - answer_key.csv: clip, task, score (0/1/2), label, file. It is what eval.agreement --key reads.
@@ -73,10 +74,21 @@ def choose(zip_path, n: int = N_CLIPS, per_cell: int = PER_CELL, seed: int = 0) 
         for task in (1, 2, 3):
             for score in (0, 1, 2):
                 take((task, score))
-    # fill up from the biggest cells, round-robin, so no cell gets many more
-    order = sorted(cells, key=lambda c: -len(cells[c]))
-    while len(picked) < n and any(take(c) for c in order[: n - len(picked)]):
-        pass
+    # fill up one clip at a time: first the biggest cell of each task (so the extras go to
+    # different tasks), then the other cells, biggest first; repeat until n
+    by_size = sorted(cells, key=lambda c: -len(cells[c]))
+    firsts = [
+        next(c for c in by_size if c[0] == t) for t in (1, 2, 3) if any(c[0] == t for c in by_size)
+    ]
+    order = sorted(firsts, key=lambda c: -len(cells[c])) + [c for c in by_size if c not in firsts]
+    while len(picked) < n:
+        added = False
+        for c in order:
+            if len(picked) >= n:
+                break
+            added = take(c) or added
+        if not added:
+            break
     return picked[:n]
 
 
