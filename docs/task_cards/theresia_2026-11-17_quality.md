@@ -54,7 +54,8 @@ foot point moves down during the try, in start torso lengths, for files whose fe
 
 `ROOM_T3 = 1.5`: with at least 1.5 torso lengths of picture below the feet at the start line, files
 whose feet reach the edge drop from 497 to 33. Team clips (adults, phone): the 9 task 3 clips
-have 0.0-0.6 torso lengths of room, and 2 of them lost the feet at the bottom, so all 9 would get
+have 0.0-0.6 torso lengths of room, and 2 of them reach the bottom edge (corrected 2026-11-24: the ankles are still found in
+every frame, `eval.dry_run_count.feet_in_picture`), so all 9 would get
 the message. The setup needs the floor in front of the start line in the picture.
 
 Optional keyword `task=None`: old calls are unchanged. The app passes `task=3` only when the

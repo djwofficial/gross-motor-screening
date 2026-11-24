@@ -124,3 +124,34 @@ def test_cli(tmp_path, capsys):
     assert drc.main([str(tmp_path / "run"), "--notes", str(notes)]) == 0
     assert "27/27" in capsys.readouterr().out
     assert drc.main([str(tmp_path / "empty")]) == 1
+
+
+def test_task3_feet_in_picture(tmp_path):
+    """Task 3 tries get the feet measure; feet pushed off the bottom are flagged."""
+    import numpy as np
+
+    from common import body25 as b
+
+    tr = make_fake_try(task=3)
+    size = (tr.meta.get("width") or 1280, tr.meta.get("height") or 720)
+    ok = drc.feet_in_picture(tr.points, size)
+    assert ok["ankle_missing"] == 0 and not ok["reached_edge"] and not ok["lost_at_bottom"]
+    assert ok["start_room"] is not None
+
+    p = tr.points.copy()
+    h = size[1]
+    half = len(p) // 2
+    feet = [b.R_ANKLE, b.L_ANKLE, b.R_HEEL, b.L_HEEL, b.R_BIG_TOE, b.L_BIG_TOE]
+    p[half - 1, feet, 1] = 0.99 * h  # feet go down to the bottom edge ...
+    p[half:, feet] = 0  # ... and leave the picture
+    out = drc.feet_in_picture(p, size)
+    assert out["lost_at_bottom"] and out["reached_edge"]
+    assert 0.4 < out["ankle_missing"] < 0.6
+    assert np.isfinite(out["start_room"])
+
+    _fake_run(tmp_path / "run")
+    res = drc.count(tmp_path / "run")
+    t3 = [r for r in res["rows"] if r["task"] == 3]
+    assert len(t3) == 9 and all("feet" in r for r in t3)
+    assert not any("feet" in r for r in res["rows"] if r["task"] != 3)
+    assert "task 3: feet in the picture" in drc.report(res)

@@ -42,3 +42,11 @@ are team data (runs/ is gitignored). Testing-day files (Nov 29) never go into an
 script on the live laptop only.
 
 **Tests:** new `tests/test_eval_dry_run_count.py`.
+
+**Added 2026-11-24: task 3 feet in the picture.** For each task 3 try the report also gives the
+share of frames with an ankle missing (neck and mid hip found), whether an ankle was lost right
+after it was below 90% of the picture height, whether the feet reached the bottom edge, and the
+floor below the feet at the start (torso lengths, `live.quality.landing_room`). The definitions
+follow Marty's experiments (section 6). These 9 numbers go to Daryn for the threshold of "check by
+teacher when the feet left the picture". Sanity check on the 9 team task 3 clips: 2 reach the
+bottom edge, no ankle missing in any frame, start room 0.01-0.61 torso lengths.
