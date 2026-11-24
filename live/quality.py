@@ -7,6 +7,8 @@ Shared interface (final, change only through Daryn):
         fps:        measured frames per second (0 or less = not measured yet, no message)
         frame_size: (width, height) of the picture
         start_area: optional (x0, y0, x1, y1) in pixels where both feet must be
+        task:       optional (keyword, added 2026-11-24, old calls unchanged): 3 adds the
+                    long-jump landing-room check
         returns a list of plain-language problems; [] means ready
 
 One message per problem, each saying what the teacher can do:
@@ -16,6 +18,15 @@ One message per problem, each saying what the teacher can do:
 - body small in the picture   -> "The child looks small ..."                   (too far)
 - points unsure               -> "Points are unsure ..."                       (too dark / blurry)
 - feet outside start_area     -> "The feet are not in the start area ..."
+- task=3 (optional, added 2026-11-24): too little floor below the feet for the long jump
+                              -> "Not enough floor in the picture below the feet ..."
+
+Task 3 landing room (Marty, docs/task_cards/marty_2026-11-23_t3_experiments.md: in most missed
+Good/Perfect jumps the feet leave the bottom of the picture). Measured on group B task 3 (1,091
+files, scratch script 2026-11-24): the lowest foot point moves down by a median 0.5-0.9 and a
+95th percentile 1.1-1.8 start torso lengths (cameras 3 / 2 / 1). With at least 1.5 torso lengths
+of picture below the feet at the start line, the files whose feet reach the bottom edge drop from
+497 to 33. So ROOM_T3 = 1.5 torso lengths.
 
 Positions here are in picture pixels on purpose: the edges and the start area are picture
 coordinates. Body size is compared as a fraction of the picture height, so it works for the
@@ -39,6 +50,8 @@ MIN_MEAN_SCORE = 0.5  # guess: team clips in normal light average 0.87-0.92
 MIN_BODY_FRAC = 0.25  # guess: body (head to feet) shorter than this part of the picture = too far
 EDGE = 0.02  # a point closer than 2% of the picture size to an edge counts as cut off
 MAX_EDGE_FRAC = 0.05  # more than 5% of the found points at an edge = body cut off
+ROOM_T3 = 1.5  # torso lengths of picture below the feet for the long jump (group B, see above)
+_FEET = [b.R_ANKLE, b.L_ANKLE, b.R_HEEL, b.L_HEEL, b.R_BIG_TOE, b.L_BIG_TOE]
 _MUST_SEE = {
     "head": [b.NOSE],
     "shoulders": [b.R_SHOULDER, b.L_SHOULDER],
@@ -66,8 +79,32 @@ def _cut_sides(xy: np.ndarray, seen: np.ndarray, w: float, h: float) -> list[str
     return [s for s, m in sides.items() if (m & seen).sum() / n > MAX_EDGE_FRAC]
 
 
+def landing_room(points, frame_size=(1280, 720), min_score: float = MIN_SCORE) -> float | None:
+    """Picture below the lowest foot point, in torso lengths (median over the frames), or None.
+
+    Pixels only to measure the place in the picture; the result is in torso lengths, so it works
+    on the webcam, the dataset and the team clips alike.
+    """
+    p = np.asarray(points, dtype=np.float32)
+    p = p[None] if p.ndim == 2 else p
+    ok = p[..., 2] > min_score
+    fy = np.where(ok[:, _FEET], p[:, _FEET, 1], -np.inf)
+    low = fy.max(axis=1)
+    torso = np.linalg.norm(p[:, b.NECK, :2] - p[:, b.MID_HIP, :2], axis=1)
+    use = np.isfinite(low) & ok[:, b.NECK] & ok[:, b.MID_HIP] & (torso > 1.0)
+    if not np.any(use):
+        return None
+    h = float(frame_size[1])
+    return float(np.median((h - low[use]) / torso[use]))
+
+
 def check(
-    points, fps: float, frame_size=(1280, 720), start_area=None, min_score: float = MIN_SCORE
+    points,
+    fps: float,
+    frame_size=(1280, 720),
+    start_area=None,
+    min_score: float = MIN_SCORE,
+    task: int | None = None,
 ) -> list[str]:
     problems: list[str] = []
     if 0 < fps < MIN_FPS:
@@ -135,4 +172,14 @@ def check(
             "The feet are not in the start area (the taped area). "
             "Ask the child to stand on the tape."
         )
+
+    # long jump: the landing spot must be in the picture too (only when the feet are seen)
+    if task == 3:
+        room = landing_room(p, frame_size, min_score)
+        if room is not None and room < ROOM_T3:
+            problems.append(
+                f"Not enough floor in the picture below the feet for the long jump ({room:.1f} "
+                f"torso lengths, at least {ROOM_T3:.1f} needed): tilt the laptop screen down a "
+                "little or move the laptop back, so the landing spot is in the picture."
+            )
     return problems
