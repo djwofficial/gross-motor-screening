@@ -45,24 +45,95 @@ def mark(value) -> bool | None:
     return None
 
 
+def feet_in_picture(points, frame_size, min_score: float = 0.3) -> dict:
+    """Did the feet stay in the picture? (task 3, Marty's experiments 2026-11-23, section 6)
+
+    ankle_missing: share of frames with neck and mid hip found but an ankle not found
+    lost_at_bottom: an ankle was lost right after it was seen below 90% of the picture height
+    reached_edge:   the lowest foot point came within 2% of the bottom edge
+    start_room:     floor below the feet in the first 10 frames, torso lengths (live.quality)
+    """
+    import numpy as np
+
+    from common import body25 as b
+    from live.quality import landing_room
+
+    p = np.asarray(points, dtype=np.float32)
+    h = float(frame_size[1])
+    ok = p[..., 2] > min_score
+    body = ok[:, b.NECK] & ok[:, b.MID_HIP]
+    ankles = ok[:, [b.R_ANKLE, b.L_ANKLE]]
+    missing = body & ~ankles.all(axis=1)
+    lost = False
+    for j, a in enumerate((b.R_ANKLE, b.L_ANKLE)):
+        seen = ankles[:, j]
+        for i in range(1, len(p)):
+            if seen[i - 1] and not seen[i] and body[i] and p[i - 1, a, 1] > 0.9 * h:
+                lost = True
+    feet = [b.R_ANKLE, b.L_ANKLE, b.R_HEEL, b.L_HEEL, b.R_BIG_TOE, b.L_BIG_TOE]
+    fy = np.where(ok[:, feet], p[:, feet, 1], -np.inf).max(axis=1)
+    room = landing_room(p[:10], frame_size, min_score) if len(p) else None
+    return {
+        "ankle_missing": float(missing.sum() / max(int(body.sum()), 1)),
+        "lost_at_bottom": bool(lost),
+        "reached_edge": bool(np.isfinite(fy).any() and fy.max() > 0.98 * h),
+        "start_room": room,
+    }
+
+
 def read_tries(run_dir) -> list[dict]:
-    """One row per saved try JSON in run_dir: code, task, try, leg, start (auto?), stop."""
+    """One row per saved try JSON in run_dir: code, task, try, leg, start (auto?), stop.
+
+    Task 3 rows also get "feet" (feet_in_picture), for the 'check by teacher when the feet left
+    the picture' threshold (Daryn, from the dry run).
+    """
     rows = []
     for p in sorted(Path(run_dir).glob("*_task*_try*_*.json")):
-        meta = json.loads(p.read_text(encoding="utf-8"))["meta"]
+        rec = json.loads(p.read_text(encoding="utf-8"))
+        meta = rec["meta"]
         stop = meta.get("stop")
-        rows.append(
-            {
-                "file": p.name,
-                "code": str(meta.get("child")),
-                "task": int(meta["task"]),
-                "try": int(meta["try"]),
-                "leg": meta.get("leg"),
-                "auto_start": meta.get("mode") == "auto",
-                "auto_end": None if stop is None else stop == "auto",
-            }
-        )
+        row = {
+            "file": p.name,
+            "code": str(meta.get("child")),
+            "task": int(meta["task"]),
+            "try": int(meta["try"]),
+            "leg": meta.get("leg"),
+            "auto_start": meta.get("mode") == "auto",
+            "auto_end": None if stop is None else stop == "auto",
+        }
+        if row["task"] == 3 and rec.get("points25"):
+            size = (meta.get("width") or 1280, meta.get("height") or 720)
+            row["feet"] = feet_in_picture(rec["points25"], size)
+        rows.append(row)
     return rows
+
+
+def feet_report(rows) -> str:
+    """Task 3 tries: did the feet stay in the picture?"""
+    t3 = [r for r in rows if r.get("feet")]
+    if not t3:
+        return ""
+    lines = [
+        "",
+        "task 3: feet in the picture (for 'check by teacher when the feet left the picture')",
+        "file                         ankle missing  lost at bottom  reached edge  start room",
+    ]
+    yn = {True: "yes", False: "no"}
+    for r in t3:
+        f = r["feet"]
+        room = "-" if f["start_room"] is None else f"{f['start_room']:.1f}"
+        lines.append(
+            f"{r['file']:<29}{f['ankle_missing']:>12.0%}  {yn[f['lost_at_bottom']]:>14}  "
+            f"{yn[f['reached_edge']]:>12}  {room:>10}"
+        )
+    n = len(t3)
+    lines.append(
+        f"feet reached the bottom edge in {sum(r['feet']['reached_edge'] for r in t3)}/{n}; "
+        f"ankle lost at the bottom in {sum(r['feet']['lost_at_bottom'] for r in t3)}/{n}; "
+        f"start room under 1.5 torso lengths in "
+        f"{sum((r['feet']['start_room'] or 0) < 1.5 for r in t3)}/{n}"
+    )
+    return "\n".join(lines)
 
 
 def read_notes(path) -> dict[tuple, dict]:
@@ -136,6 +207,9 @@ def report(result: dict) -> str:
     for r in result["rows"]:
         if r.get("check"):
             lines.append(f"check {r['file']}: {r['check']}")
+    feet = feet_report(result["rows"])
+    if feet:
+        lines.append(feet)
     return "\n".join(lines)
 
 
