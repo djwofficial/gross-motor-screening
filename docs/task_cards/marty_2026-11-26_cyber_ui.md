@@ -45,6 +45,6 @@ frames of each transition to `runs/ui_preview/` (git-ignored).
 - `python -m app.main --fake`: 1 try saved, log.csv written.
 - Render time of one picture at 1920x1080, camera view, recording (30 renders): **49 ms** new vs
   **63 ms** on main. The vignette and scan lines are one cached uint8 multiply, the floor plate is
-  one mask, and there is no wasted background fill. At 1280x720 the old cost was ~48 ms.
+  one mask, and there is no wasted background fill.
 - `python scripts/preview_cyber_ui.py`: 60 PNGs in `runs/ui_preview/` (show_score and `t_*`
   testing mode). They were checked by eye.
