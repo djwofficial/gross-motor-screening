@@ -130,7 +130,8 @@ def test_demo_runner_task3_idle_hint_preview_window_and_result_persistence(tmp_p
     assert runner.result is None
 
 
-def test_floating_shoulder_score_badge_follows_body_and_stays_off_in_testing_mode(tmp_path):
+def test_eval_bar_shows_live_probabilities_and_stays_off_in_testing_mode(tmp_path):
+    """The shoulder badge was replaced by the cyber evaluation bar (Marty, 2026-11-26)."""
     runner = DemoRunner(tmp_path, mode="manual", frame_size=(1280, 720), source="fake")
     _enter_child(runner, "K03")
 
@@ -138,24 +139,24 @@ def test_floating_shoulder_score_badge_follows_body_and_stays_off_in_testing_mod
     for _ in range(45):
         runner.feed(s.read())
     s.close()
-    runner.live = {"score": 2, "confidence": 0.85, "reasons": "steady", "task": 1}
-
-    shown_text = " ".join(screen.render(runner, view="camera", show_score=True).texts)
-    assert "Perfect" in shown_text and "Preview · 85% · Stand" in shown_text
-    assert "LIVE SCORE" not in shown_text
-
+    runner.live = {
+        "score": 2,
+        "confidence": 0.85,
+        "reasons": "steady",
+        "task": 1,
+        "proba": (0.05, 0.10, 0.85),
+    }
     runner.ctrl.state = "recording"
-    rec_text = " ".join(screen.render(runner, view="camera", show_score=True).texts)
-    assert "Live · 85% · Stand" in rec_text
-    runner.ctrl.state = "idle"
+    rec_text = screen.render(runner, view="camera", show_score=True).texts
+    assert "85%" in rec_text and "PERFECT" in rec_text and "EVAL" in rec_text
 
     hidden_text = " ".join(screen.render(runner, view="camera", show_score=False).texts).lower()
-    for word in ("bad", "good", "perfect", "score"):
+    for word in ("bad", "good", "perfect", "score", "85%", "eval"):
         assert word not in hidden_text
 
-    assert "LIVE SCORE" in " ".join(screen.render(runner, view="neutral", show_score=True).texts)
-    runner.last_points = None
-    assert "LIVE SCORE" in " ".join(screen.render(runner, view="camera", show_score=True).texts)
+    runner.live = {"error": "no live score yet: no torso"}
+    assert "WAITING FOR A CLEAR VIEW" in screen.render(runner, "camera", show_score=True).texts
+    runner.ctrl.state = "idle"
 
 
 def test_setup_back_navigation_and_readiness_single_focus(tmp_path):

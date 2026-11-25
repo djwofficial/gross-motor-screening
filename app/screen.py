@@ -1,26 +1,37 @@
-"""The one fullscreen window of the live laptop. Owner: Daryn.
+"""The one fullscreen window of the live laptop. Owner: Daryn (cyber HUD look: Marty, 2026-11-26).
 
 Both entry points draw with this module:
     python -m app.ui ...                 testing mode: never a score on screen (show_score=False)
     python -m app.ui ... --show-score    and python -m app.demo: live score + last saved try
 
-Look: edge-to-edge fullscreen camera (or stick figure) with a minimal, cardless typographic HUD
-over soft edge scrims so every metric (FPS, feet visibility, state, task, live score) stays legible
-without heavy boxes. Every keyboard shortcut is also clickable; pressing F toggles fullscreen.
-Setup and confirm states use focused centered panels for typing or verifying an uncertain try.
-Gesture mode (app.demo, show_score): a big 3-2-1 in the middle, a ring on the wrist or the crossed
-arms while a gesture is held, the result of each attempt in large type (no box, fades in and out),
-the attempts of the recording on the right and a summary after the X.
+Look: a space-cyber game HUD over the edge-to-edge camera (or stick figure): dark space colours,
+neon cyan accent with a soft glow, thin cut-corner (chamfered) frames, faint scan lines and a tech
+font (Orbitron for big text, Rajdhani for the rest, both SIL OFL 1.1, in app/fonts/; the system
+font is used if the files are missing). Every keyboard shortcut is also clickable; F toggles
+fullscreen. Setup and confirm states use centred frames for typing or checking a try.
+
+Phases of one try:
+    floor plate   a fake-3D plate lying on the floor at the start area (no floor detection: the
+                  tilt constants PLATE_* are guesses); it fills with blinking green ("READY") when
+                  both ankles stand on it (visual only, it is not a start gate)
+    countdown     gesture mode: glitching neon 3-2-1 in a segmented ring, then "GO"
+    detection     top right: the task panel (TASK n, task name); show_score: on the left edge an
+                  evaluation bar with the live Bad / Good / Perfect probabilities
+    result        a big centred box when an attempt ends, which then flies into the right sidebar
+    sidebar       show_score: one row per attempt of this recording, newest on top
+
+Scores: Bad red, Good yellow-green, Perfect green. Every animation runs on time (_clock, which is
+time.monotonic, or the Runner's stream seconds for windows the Runner defines), never on frame
+counts: pose runs at ~8 fps on a CPU.
 
 Size: run_window draws at the screen's own size (set_size(canvas_size(screen_size()))), so the
 fullscreen window has no bars and nothing is stretched (Mac: 1512x982 points). The camera picture
 fills the height; on a 16:10 screen a little of both sides of a 16:9 camera is cut on screen only
 (MAX_SIDE_CROP); pose detection always used the whole picture.
 
-Text is drawn with Pillow in the system font (SF Pro on Mac, Segoe UI on Windows, DejaVu Sans from
-matplotlib otherwise). render() only reads the Runner, never changes it. With show_score=False it
-never reads runner.live or runner.result, so no score can reach the screen in testing mode.
-Pose detection always ran on the unmirrored picture; only this picture is mirrored.
+render() only reads the Runner, never changes it (animation state lives here, in _ANIM). With
+show_score=False it never reads runner.live or runner.result, so no score can reach the screen in
+testing mode. Pose detection always ran on the unmirrored picture; only this picture is mirrored.
 Screening aid only, never a diagnosis.
 """
 
@@ -31,7 +42,7 @@ import os
 import sys
 import time
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -51,6 +62,26 @@ MAX_CANVAS_H = 1080  # bigger screens are drawn at this height and scaled up by 
 MIN_CANVAS_H = 720
 MAX_SIDE_CROP = 0.08  # on screen only: cut at most this much of each side of the camera picture
 
+# Floor plate: a trapezoid lying on the floor at the start area. GUESSES (a webcam has no depth and
+# nothing here detects the floor): tune them by eye on the real room.
+PLATE_DEPTH = 1.0  # far edge above the near edge by this fraction of the start-area height
+PLATE_TOP_INSET = 0.16  # far edge narrower by this fraction of the plate width, on each side
+PLATE_BRACKET = 0.2  # corner bracket arm, as a fraction of the plate side (floor units)
+PLATE_GRID = 4  # grid cells per side on the plate
+READY_MIN_SCORE = 0.3  # an ankle with a lower score is not counted (as live.start_area.MIN_SCORE)
+
+# Animation lengths in seconds.
+TASK_SWAP_S = 0.4  # task panel: glitch out the old task, flicker in the new one
+GO_S = 0.5  # "GO" after the countdown
+BOX_IN_S = 0.6  # result box opens
+BOX_OUT_S = 0.5  # result box closes and flies into the sidebar
+BOX_SHOW_S = 2.5  # result box on screen in manual/auto mode and testing mode
+ROW_FLASH_S = 0.6  # a sidebar row flashes when its result lands
+BAR_TAU_S = 0.25  # evaluation bar easing time constant
+SCANLINE_GAIN = 0.86  # every 3rd row of the picture this bright: faint scan lines
+
+_clock = time.monotonic  # replaced by scripts/preview_cyber_ui.py to render chosen moments
+
 
 def set_size(w: int, h: int) -> None:
     """Draw every picture at w x h from now on (run_window: the screen's own size)."""
@@ -59,6 +90,7 @@ def set_size(w: int, h: int) -> None:
     VW, VH = W, H
     BAR_Y = H - BAR_H - 6
     _backdrop.cache_clear()
+    _vignette.cache_clear()
 
 
 def screen_size() -> tuple[int, int] | None:
@@ -103,28 +135,29 @@ def _bgr(hex_colour: str) -> tuple[int, int, int]:
     return int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16)
 
 
-BG = _bgr("#090d12")
-SURFACE = _bgr("#131922")
-RAISED = _bgr("#1e2632")
-LINE = _bgr("#303846")
-TEXT = _bgr("#f6f8fa")
-DIM = _bgr("#c9d1d9")
-FAINT = _bgr("#9ea7b3")
-ACCENT = _bgr("#79c0ff")
-GREEN = _bgr("#56d364")
-RED = _bgr("#ff7b72")
-AMBER = _bgr("#f8d46c")
-PURPLE = _bgr("#d2a8ff")
-LETTERBOX = _bgr("#05070a")
-NEUTRAL = _bgr("#181e26")
-SHADOW = _bgr("#05070a")
+BG = _bgr("#05070f")  # deep space
+SURFACE = _bgr("#0a1124")
+RAISED = _bgr("#101b34")
+LINE = _bgr("#1f3654")
+TEXT = _bgr("#e8f8ff")
+DIM = _bgr("#a3bdd1")
+FAINT = _bgr("#6d87a0")
+ACCENT = _bgr("#00e5ff")  # neon cyan
+GREEN = _bgr("#00ff6a")  # Perfect, ready, ok
+LIME = _bgr("#c6ff3d")  # Good
+RED = _bgr("#ff3355")  # Bad, recording, stop
+AMBER = _bgr("#ffb547")  # warnings only (paused, locked, outside the age range)
+PURPLE = _bgr("#c58cff")  # check by teacher
+LETTERBOX = _bgr("#020308")
+NEUTRAL = _bgr("#0a0f1a")
+SHADOW = _bgr("#000207")
 
 STATE_COLOURS = {
-    "setup": _bgr("#9ea7b3"),
+    "setup": FAINT,
     "readiness": ACCENT,
-    "idle": _bgr("#c9d1d9"),
+    "idle": DIM,
     "ready": GREEN,
-    "countdown": AMBER,
+    "countdown": ACCENT,
     "recording": RED,
     "confirm": AMBER,
 }
@@ -138,7 +171,7 @@ STATE_NAMES = {
     "confirm": "Check the try",
 }
 SCORE_NAMES = dict(b.LABELS)
-SCORE_COLOURS = {0: RED, 1: AMBER, 2: GREEN}
+SCORE_COLOURS = {0: RED, 1: LIME, 2: GREEN}
 SCORE_WORDS = {
     0: "did not complete the task this time",
     1: "completed the task with some difficulty",
@@ -151,15 +184,19 @@ _RIGHT_PTS = {b.R_SHOULDER, b.R_ELBOW, b.R_WRIST, b.R_HIP, b.R_KNEE, b.R_ANKLE, 
 _RIGHT_PTS |= set(b.RIGHT_FOOT)
 _LEFT_PTS = {b.L_SHOULDER, b.L_ELBOW, b.L_WRIST, b.L_HIP, b.L_KNEE, b.L_ANKLE, b.L_EYE, b.L_EAR}
 _LEFT_PTS |= set(b.LEFT_FOOT)
-FIG_RIGHT, FIG_LEFT, FIG_MID = _bgr("#ff9f43"), _bgr("#4da3ff"), _bgr("#f0f6fc")
+FIG_RIGHT, FIG_LEFT, FIG_MID = _bgr("#ff9f43"), _bgr("#2fa8ff"), _bgr("#eafcff")
 MIN_SCORE = 0.05
 
+# ---------------------------------------------------------------------- fonts and text
+
+FONT_DIR = Path(__file__).resolve().parent / "fonts"
 _WEIGHTS = ("regular", "medium", "semibold", "bold")
+_RAJDHANI = {"regular": "Regular", "medium": "Medium", "semibold": "SemiBold", "bold": "Bold"}
+_ORBITRON = FONT_DIR / "Orbitron-Variable.ttf"
 
 
-@lru_cache(maxsize=1)
-def _font_sources() -> dict[str, tuple[str, int, str | None]]:
-    """weight -> (font file, index in a .ttc, variation name of a variable font)."""
+def _system_font_sources() -> dict[str, tuple[str, int, str | None]]:
+    """The system font (SF Pro on Mac, Segoe UI on Windows, DejaVu Sans from matplotlib)."""
     if sys.platform == "darwin":
         sf = "/System/Library/Fonts/SFNS.ttf"  # SF Pro, variable
         if os.path.exists(sf):
@@ -195,7 +232,26 @@ def _font_sources() -> dict[str, tuple[str, int, str | None]]:
     return {}
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=1)
+def _font_sources() -> dict[str, tuple[str, int, str | None]]:
+    """weight -> (font file, index in a .ttc, variation name of a variable font).
+
+    regular..bold: Rajdhani from app/fonts (else the system font); display: Orbitron Bold for big
+    text (else the bold weight). Orbitron has no middle dot: never give it a string with one.
+    """
+    raj = {w: FONT_DIR / f"Rajdhani-{n}.ttf" for w, n in _RAJDHANI.items()}
+    if all(p.exists() for p in raj.values()):
+        src = {w: (str(p), 0, None) for w, p in raj.items()}
+    else:
+        src = _system_font_sources()
+    if _ORBITRON.exists():
+        src["display"] = (str(_ORBITRON), 0, "Bold")
+    elif "bold" in src:
+        src["display"] = src["bold"]
+    return src
+
+
+@lru_cache(maxsize=96)
 def _font(size: int, weight: str = "regular"):
     from PIL import ImageFont
 
@@ -215,7 +271,7 @@ def _font(size: int, weight: str = "regular"):
     return ImageFont.load_default(size)
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=96)
 def _metrics(size: int, weight: str) -> tuple[int, int, float]:
     """(ascent, descent, middle of the capital letters measured from the top of the line)."""
     f = _font(size, weight)
@@ -243,14 +299,14 @@ def _ink(s: str, size: int, weight: str) -> np.ndarray:
 
 
 @lru_cache(maxsize=512)
-def _halo(s: str, size: int, weight: str) -> tuple[np.ndarray, int]:
-    """A soft dark halo that follows the letters (blurred ink), and its padding in pixels."""
+def _halo(s: str, size: int, weight: str, spread: float = 2.2) -> tuple[np.ndarray, int]:
+    """A soft halo that follows the letters (blurred ink), and its padding in pixels."""
     import cv2
 
     ink = _ink(s, size, weight)[..., 0]
     pad = max(3, size // 6)
     big = np.pad(ink, pad)
-    halo = cv2.GaussianBlur(big, (0, 0), sigmaX=pad / 2.2)
+    halo = cv2.GaussianBlur(big, (0, 0), sigmaX=pad / spread)
     return np.clip(halo * 2.2, 0, 1)[..., None], pad
 
 
@@ -273,6 +329,9 @@ def wrap(s: str, size: int, weight: str, max_w: float, max_lines: int | None = N
             last = last[:-1]
         lines[-1] = last.rstrip() + "…"
     return lines
+
+
+# ---------------------------------------------------------------------- masks and backdrops
 
 
 @lru_cache(maxsize=512)
@@ -304,19 +363,139 @@ def _ring_mask(w: int, h: int, r: int, bw: int) -> np.ndarray:
     return outer - inner
 
 
+def _chamfer_points(w: float, h: float, cut: float) -> np.ndarray:
+    """Outline of a box with the top-left and bottom-right corners cut at 45 degrees."""
+    return np.array(
+        [[cut, 0], [w, 0], [w, h - cut], [w - cut, h], [0, h], [0, cut]], dtype=np.float64
+    )
+
+
+@lru_cache(maxsize=256)
+def _chamfer_mask(w: int, h: int, cut: int) -> np.ndarray:
+    """Anti-aliased alpha (h, w, 1) of a chamfered box (fill)."""
+    import cv2
+
+    k = 4
+    big = np.zeros((h * k, w * k), np.uint8)
+    pts = np.round(_chamfer_points(w * k - 1, h * k - 1, cut * k)).astype(np.int32)
+    cv2.fillPoly(big, [pts], 255, cv2.LINE_AA)
+    small = cv2.resize(big, (w, h), interpolation=cv2.INTER_AREA)
+    return small.astype(np.float32)[..., None] / 255.0
+
+
+@lru_cache(maxsize=256)
+def _chamfer_line(w: int, h: int, cut: int, bw: int = 1) -> np.ndarray:
+    """Anti-aliased alpha (h, w, 1) of the chamfered outline only."""
+    import cv2
+
+    k = 4
+    big = np.zeros((h * k, w * k), np.uint8)
+    inset = bw * k / 2
+    pts = _chamfer_points(w * k - 1 - 2 * inset, h * k - 1 - 2 * inset, cut * k) + inset
+    cv2.polylines(big, [np.round(pts).astype(np.int32)], True, 255, bw * k, cv2.LINE_AA)
+    small = cv2.resize(big, (w, h), interpolation=cv2.INTER_AREA)
+    return small.astype(np.float32)[..., None] / 255.0
+
+
+@lru_cache(maxsize=128)
+def _chamfer_glow(w: int, h: int, cut: int, spread: int = 8) -> tuple[np.ndarray, int]:
+    """Soft neon glow (blurred outline) around a chamfered box, and its padding."""
+    import cv2
+
+    line = np.pad(_chamfer_line(w, h, cut, 2)[..., 0], spread * 2)
+    glow = cv2.GaussianBlur(line, (0, 0), sigmaX=spread / 2)
+    return np.clip(glow * 2.0, 0, 1)[..., None], spread * 2
+
+
 @lru_cache(maxsize=1)
 def _backdrop() -> np.ndarray:
-    """Dark backdrop for the stick figure: a soft light in the middle."""
+    """Deep-space backdrop for the stick figure: a cold glow in the middle and a few stars."""
+    import cv2
+
     yy, xx = np.mgrid[0:VH, 0:VW].astype(np.float32)
     d = np.sqrt(((xx - VW / 2) / (VW / 2)) ** 2 + ((yy - VH * 0.45) / (VH / 2)) ** 2)
     t = np.clip(d / 1.3, 0, 1)[..., None]
-    inner, outer = np.array(_bgr("#18202a"), np.float32), np.array(BG, np.float32)
+    inner, outer = np.array(_bgr("#0d1830"), np.float32), np.array(BG, np.float32)
     noise = np.random.default_rng(0).uniform(-0.5, 0.5, (VH, VW, 1)).astype(np.float32)
-    return np.clip(inner * (1 - t) + outer * t + 0.5 + noise, 0, 255).astype(np.uint8)
+    img = np.clip(inner * (1 - t) + outer * t + 0.5 + noise, 0, 255).astype(np.uint8)
+    rng = np.random.default_rng(7)
+    for _ in range(int(VW * VH / 9000)):
+        x, y = int(rng.integers(0, VW)), int(rng.integers(0, VH))
+        v = int(rng.integers(70, 200))
+        r = 1 if rng.random() < 0.85 else 2
+        cv2.circle(img, (x, y), r, (v, v, int(v * 0.85)), -1, cv2.LINE_AA)
+    img[::3] = (img[::3] * SCANLINE_GAIN).astype(np.uint8)  # scan lines
+    return img
+
+
+@lru_cache(maxsize=1)
+def _vignette() -> np.ndarray:
+    """uint8 gain (VH, VW, 3), 255 = unchanged: darkens the corners a little (screen glass).
+
+    Applied with one cv2.multiply (fast at 1080p; a float blend of the whole frame is not)."""
+    yy, xx = np.mgrid[0:VH, 0:VW].astype(np.float32)
+    d = np.sqrt(((xx - VW / 2) / (VW / 2)) ** 2 + ((yy - VH / 2) / (VH / 2)) ** 2)
+    gain = 1.0 - np.clip((d - 0.75) / 0.7, 0, 1) ** 1.6 * 0.55
+    gain[::3] *= SCANLINE_GAIN  # the scan lines are baked in (no extra pass per frame)
+    g = np.round(gain * 255).astype(np.uint8)
+    return np.repeat(g[..., None], 3, axis=2)
 
 
 def _lighten(c, f: float = 0.14):
     return tuple(int(v + (255 - v) * f) for v in c)
+
+
+def _mix(c1, c2, f: float):
+    return tuple(int(round(a + (b2 - a) * f)) for a, b2 in zip(c1, c2, strict=True))
+
+
+# ---------------------------------------------------------------------- small animation maths
+
+
+def _clip01(x: float) -> float:
+    return float(min(max(x, 0.0), 1.0))
+
+
+def _ease(x: float) -> float:
+    """Smoothstep 0..1."""
+    x = _clip01(x)
+    return x * x * (3 - 2 * x)
+
+
+def _ease_out(x: float) -> float:
+    x = _clip01(x)
+    return 1 - (1 - x) ** 3
+
+
+def _seg(p: float, a: float, b2: float) -> float:
+    """Progress 0..1 of p inside the window a..b2."""
+    return _clip01((p - a) / (b2 - a)) if b2 > a else float(p >= a)
+
+
+def _blink(t: float, hz: float = 1.5) -> float:
+    """0..1 pulse."""
+    return 0.5 + 0.5 * math.sin(2 * math.pi * hz * t)
+
+
+_FLICKER = (0.0, 0.85, 0.05, 1.0, 0.25, 0.9, 0.55, 1.0)
+
+
+def _flicker(p: float) -> float:
+    """Alpha while something 'flickers in' (p 0..1): a few hard on/off steps, then on."""
+    if p <= 0:
+        return 0.0
+    if p >= 1:
+        return 1.0
+    return _FLICKER[min(len(_FLICKER) - 1, int(p * len(_FLICKER)))]
+
+
+def _approach(old: np.ndarray, new: np.ndarray, dt: float, tau: float = BAR_TAU_S) -> np.ndarray:
+    """Exponential easing from old toward new over dt seconds."""
+    k = 1.0 - math.exp(-max(dt, 0.0) / tau)
+    return old + (new - old) * k
+
+
+# ---------------------------------------------------------------------- canvas
 
 
 class Canvas:
@@ -325,7 +504,8 @@ class Canvas:
     def __init__(self, w: int | None = None, h: int | None = None, bg=BG):
         w, h = W if w is None else w, H if h is None else h
         self.img = np.empty((h, w, 3), np.uint8)
-        self.img[:] = bg
+        if bg is not None:  # None: the caller paints every pixel (render: _video)
+            self.img[:] = bg
         self.texts: list[str] = []
 
     def paint(self, x: int, y: int, alpha: np.ndarray, colour) -> None:
@@ -352,16 +532,22 @@ class Canvas:
         alpha=1.0,
         shadow: bool = False,
         glow: float = 0.0,
+        neon: float = 0.0,
+        record: bool = True,
     ):
         """anchor: l/c/r then t (top of the line box), m (middle of capitals) or b (baseline).
 
-        glow (0..1): a soft dark halo around the letters, so big text reads on any picture
-        without a box behind it."""
+        glow (0..1): a soft dark halo around the letters, so text reads on any picture.
+        neon (0..1): a soft halo in the text's own colour (the HUD glow).
+        alpha 0 draws nothing but still records the string (record=False: never recorded)."""
         s = str(s)
         if not s:
             return 0.0
-        self.texts.append(s)
+        if record:
+            self.texts.append(s)
         w = measure(s, size, weight)
+        if alpha <= 0:
+            return w
         asc, _desc, mid = _metrics(size, weight)
         if anchor[0] == "c":
             x -= w / 2
@@ -378,6 +564,9 @@ class Canvas:
             self.paint(px - pad, py - pad + max(1, size // 24), halo * (glow * alpha), SHADOW)
         if shadow:
             self.paint(px + 1, py + 1, ink * (0.75 * alpha), SHADOW)
+        if neon > 0:
+            halo, pad = _halo(s, size, weight, 1.2)
+            self.paint(px - pad, py - pad, halo * (0.55 * neon * alpha), colour)
         self.paint(px, py, ink if alpha >= 1 else ink * alpha, colour)
         return w
 
@@ -402,6 +591,32 @@ class Canvas:
         self.paint(x, y + h - band, m[h - band :], colour)
         self.paint(x, y + band, m[band : h - band, :band], colour)
         self.paint(x + w - band, y + band, m[band : h - band, w - band :], colour)
+
+    def frame(
+        self,
+        x,
+        y,
+        w,
+        h,
+        cut: int = 12,
+        colour=ACCENT,
+        fill=SURFACE,
+        fill_alpha: float = 0.78,
+        line_alpha: float = 0.9,
+        glow: float = 0.45,
+    ):
+        """A chamfered HUD frame: dark fill, thin neon outline and a soft glow."""
+        x, y, w, h = int(round(x)), int(round(y)), int(round(w)), int(round(h))
+        if w < 4 or h < 4:
+            return
+        cut = int(max(0, min(cut, w // 3, h // 3)))
+        if fill is not None and fill_alpha > 0:
+            self.paint(x, y, _chamfer_mask(w, h, cut) * fill_alpha, fill)
+        if glow > 0 and w * h < 2_000_000:
+            g, pad = _chamfer_glow(w, h, cut)
+            self.paint(x - pad, y - pad, g * glow, colour)
+        if line_alpha > 0:
+            self.paint(x, y, _chamfer_line(w, h, cut) * line_alpha, colour)
 
     def round_corners(self, x, y, w, h, r, bg=BG):
         """Cut the corners of a picture already drawn at (x, y, w, h) back to bg."""
@@ -446,6 +661,116 @@ class Canvas:
 
         cv2.circle(self.img, (int(cx * 4), int(cy * 4)), int(r * 4), colour, -1, cv2.LINE_AA, 2)
 
+    def poly(self, pts, colour, alpha: float = 1.0, closed: bool = True, thickness: int = 1):
+        """Anti-aliased polyline (window pixels) with alpha; thickness -1 fills it."""
+        import cv2
+
+        pts = np.asarray(pts, np.float64)
+        if alpha <= 0 or len(pts) < 2:
+            return
+        ih, iw = self.img.shape[:2]
+        x0 = int(max(0, math.floor(pts[:, 0].min()) - abs(thickness) - 2))
+        y0 = int(max(0, math.floor(pts[:, 1].min()) - abs(thickness) - 2))
+        x1 = int(min(iw, math.ceil(pts[:, 0].max()) + abs(thickness) + 3))
+        y1 = int(min(ih, math.ceil(pts[:, 1].max()) + abs(thickness) + 3))
+        if x0 >= x1 or y0 >= y1:
+            return
+        q = np.round((pts - (x0, y0)) * 4).astype(np.int32)
+        if alpha >= 1:
+            reg = self.img[y0:y1, x0:x1]
+            if thickness < 0:
+                cv2.fillPoly(reg, [q], colour, cv2.LINE_AA, 2)
+            else:
+                cv2.polylines(reg, [q], closed, colour, thickness, cv2.LINE_AA, 2)
+            return
+        m = np.zeros((y1 - y0, x1 - x0), np.uint8)
+        if thickness < 0:
+            cv2.fillPoly(m, [q], 255, cv2.LINE_AA, 2)
+        else:
+            cv2.polylines(m, [q], closed, 255, thickness, cv2.LINE_AA, 2)
+        self.paint(x0, y0, m.astype(np.float32)[..., None] * (alpha / 255.0), colour)
+
+
+def _brackets(
+    cv: Canvas, x, y, w, h, arm, colour, corners=("tl", "tr", "bl", "br"), th=2, alpha=1.0
+):
+    """Right-angle corner brackets of a box."""
+    spots = {
+        "tl": (x, y, 1, 1),
+        "tr": (x + w, y, -1, 1),
+        "bl": (x, y + h, 1, -1),
+        "br": (x + w, y + h, -1, -1),
+    }
+    for c in corners:
+        px, py, sx, sy = spots[c]
+        cv.poly(
+            [(px + sx * arm, py), (px, py), (px, py + sy * arm)],
+            colour,
+            alpha,
+            closed=False,
+            thickness=th,
+        )
+
+
+def _glitch(cv: Canvas, x, y, w, h, amount: float, seed: int) -> None:
+    """Slice jitter (bands shifted sideways) and a colour split (red and blue pulled apart)."""
+    if amount <= 0:
+        return
+    ih, iw = cv.img.shape[:2]
+    x0, y0 = max(0, int(x)), max(0, int(y))
+    x1, y1 = min(iw, int(x + w)), min(ih, int(y + h))
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return
+    reg = cv.img[y0:y1, x0:x1]
+    src = reg.copy()
+    rng = np.random.default_rng(seed)
+    hh = y1 - y0
+    for _ in range(int(rng.integers(3, 7))):
+        a = int(rng.integers(0, hh))
+        bh = int(rng.integers(2, max(3, hh // 5)))
+        dx = int(round(rng.choice((-1, 1)) * amount * rng.uniform(6, 26)))
+        reg[a : a + bh] = np.roll(src[a : a + bh], dx, axis=1)
+    s = max(1, int(round(amount * 7)))
+    reg[:, :, 2] = np.roll(reg[:, :, 2], s, axis=1)
+    reg[:, :, 0] = np.roll(reg[:, :, 0], -s, axis=1)
+
+
+# ---------------------------------------------------------------------- per-runner animation state
+
+
+@dataclass
+class _Anim:
+    """What the screen remembers between pictures of one Runner (never stored on the Runner)."""
+
+    t_last: float | None = None
+    bar: np.ndarray | None = None
+    task_key: tuple | None = None
+    task_old: tuple | None = None
+    task_content: tuple | None = None
+    task_since: float = -1e9
+    prev_state: str | None = None
+    go_since: float = -1e9
+    result_key: object = None
+    result_since: float = -1e9
+    history: list = field(default_factory=list)
+    child: str | None = None
+    tries_saved: int | None = None
+    saved_task: int | None = None
+    saved_since: float = -1e9
+
+
+_ANIM: weakref.WeakKeyDictionary[object, _Anim] = weakref.WeakKeyDictionary()
+
+
+def _anim(runner) -> _Anim:
+    a = _ANIM.get(runner)
+    if a is None:
+        a = _ANIM[runner] = _Anim()
+    return a
+
+
+# ---------------------------------------------------------------------- stick figure
+
 
 def _side(i: int):
     if i in _RIGHT_PTS:
@@ -475,6 +800,9 @@ def draw_skeleton(img, pts: np.ndarray, scale: float, ox: float, oy: float) -> N
         cv2.circle(img, p[i], r * 4, _side(int(i)), -1, cv2.LINE_AA, 2)
 
 
+# ---------------------------------------------------------------------- bottom strip (buttons)
+
+
 @dataclass
 class Button:
     """A clickable keyboard shortcut or plain HUD label in the bottom strip."""
@@ -501,14 +829,14 @@ class Button:
         )
 
 
-_LABEL = (13, "semibold")
-_CAP = (11, "semibold")
+_LABEL = (15, "semibold")
+_CAP = (12, "bold")
 _GROUP_GAP = 20
 
 
 def _width(btn: Button) -> int:
     if btn.kind == "label":
-        return math.ceil(measure(btn.label, 12, "semibold"))
+        return math.ceil(measure(btn.label, 14, "semibold"))
     p = btn.pad if btn.kind != "seg" else max(8, btn.pad - 2)
     w = p + measure(btn.label, *_LABEL) + p
     if btn.dot:
@@ -686,77 +1014,108 @@ def _draw_primary_divider(cv: Canvas, btns: list[Button]) -> None:
             prev_end = max(b.x + b.w for b in left_neighbors)
             if primary.x - prev_end <= 24:
                 sx = (prev_end + primary.x) // 2
-                cv.rrect(sx, BAR_Y + 9, 1, BAR_H - 18, 1, fill=TEXT, alpha=0.20)
+                cv.rrect(sx, BAR_Y + 9, 1, BAR_H - 18, 0, fill=ACCENT, alpha=0.35)
 
 
 def _draw_button(cv: Canvas, btn: Button, hovered: bool) -> None:
     cy = btn.y + btn.h / 2
     if btn.kind == "label":
         col = btn.colour if btn.colour != ACCENT else FAINT
-        cv.text(btn.x, cy, btn.label, 12, "semibold", col, "lm", shadow=True)
+        cv.text(btn.x, cy, btn.label, 14, "semibold", col, "lm", shadow=True)
         return
 
     is_primary = btn.kind == "primary"
     is_seg = btn.kind == "seg"
     is_danger = btn.kind == "danger"
+    bx, by, bw, bh = btn.x, btn.y + 3, btn.w, btn.h - 6
 
     if is_primary:
-        cv.rrect(
-            btn.x,
-            btn.y + 3,
-            btn.w,
-            btn.h - 6,
+        cv.frame(
+            bx,
+            by,
+            bw,
+            bh,
             8,
+            btn.colour,
             fill=btn.colour,
-            alpha=0.28 if hovered else 0.18,
-            border=btn.colour,
-            border_alpha=0.75 if hovered else 0.45,
+            fill_alpha=0.30 if hovered else 0.16,
+            line_alpha=1.0 if hovered else 0.8,
+            glow=0.6 if hovered else 0.35,
         )
-        fg = TEXT if hovered else _lighten(btn.colour, 0.25)
+        fg = TEXT if hovered else _lighten(btn.colour, 0.3)
     elif is_seg:
         if hovered:
-            cv.rrect(btn.x, btn.y + 4, btn.w, btn.h - 8, 7, fill=TEXT, alpha=0.10)
+            cv.frame(
+                bx, by, bw, bh, 6, ACCENT, fill=ACCENT, fill_alpha=0.10, line_alpha=0.4, glow=0
+            )
         if btn.selected:
-            cv.rrect(btn.x + 8, btn.y + btn.h - 4, btn.w - 16, 2, 1, fill=ACCENT, alpha=0.95)
-            fg = TEXT
+            cv.rrect(bx + 6, btn.y + btn.h - 5, bw - 12, 2, 0, fill=ACCENT, alpha=1.0)
+            cv.rrect(bx + 6, btn.y + btn.h - 7, bw - 12, 6, 0, fill=ACCENT, alpha=0.15)
+            fg = ACCENT
         else:
             fg = TEXT if hovered else DIM
     elif is_danger:
-        if hovered:
-            cv.rrect(btn.x, btn.y + 4, btn.w, btn.h - 8, 7, fill=RED, alpha=0.18)
+        line = 0.8 if hovered else 0.0
+        cv.frame(
+            bx,
+            by,
+            bw,
+            bh,
+            6,
+            RED,
+            fill=RED,
+            fill_alpha=0.16 if hovered else 0.0,
+            line_alpha=line,
+            glow=0,
+        )
         fg = RED if hovered else DIM
     else:
         if btn.selected:
-            cv.rrect(
-                btn.x,
-                btn.y + 4,
-                btn.w,
-                btn.h - 8,
-                7,
+            cv.frame(
+                bx,
+                by,
+                bw,
+                bh,
+                6,
+                btn.colour,
                 fill=btn.colour,
-                alpha=0.22 if hovered else 0.14,
+                fill_alpha=0.22 if hovered else 0.12,
+                line_alpha=0.7,
+                glow=0,
             )
             fg = _lighten(btn.colour, 0.2)
         else:
             if hovered:
-                cv.rrect(btn.x, btn.y + 4, btn.w, btn.h - 8, 7, fill=TEXT, alpha=0.10)
+                cv.frame(
+                    bx,
+                    by,
+                    bw,
+                    bh,
+                    6,
+                    ACCENT,
+                    fill=ACCENT,
+                    fill_alpha=0.10,
+                    line_alpha=0.5,
+                    glow=0,
+                )
             fg = TEXT if hovered else DIM
 
     x = btn.x + btn.pad
     if btn.cap:
         kw = max(18.0, measure(btn.cap, *_CAP) + 10)
         kh = 19
-        cap_border = btn.colour if (is_primary or btn.selected) else TEXT
-        cv.rrect(
+        cap_col = btn.colour if (is_primary or btn.selected) else ACCENT
+        cv.frame(
             x,
             cy - kh / 2,
             kw,
             kh,
-            5,
+            4,
+            cap_col,
             fill=BG,
-            alpha=0.55,
-            border=cap_border,
-            border_alpha=0.55 if (is_primary or btn.selected or hovered) else 0.25,
+            fill_alpha=0.6,
+            line_alpha=0.75 if (is_primary or btn.selected or hovered) else 0.35,
+            glow=0,
         )
         cv.text(
             x + kw / 2,
@@ -771,6 +1130,9 @@ def _draw_button(cv: Canvas, btn: Button, hovered: bool) -> None:
         cv.dot(x + 4, cy, 3.5, btn.dot)
         x += 12
     cv.text(x, cy, btn.label, *_LABEL, colour=fg, anchor="lm", shadow=True)
+
+
+# ---------------------------------------------------------------------- video and floor plate
 
 
 def _stage_transform(frame_size: tuple[float, float]) -> tuple[float, int, int, int, int]:
@@ -788,65 +1150,160 @@ def _stage_transform(frame_size: tuple[float, float]) -> tuple[float, int, int, 
     return s, dw, dh, (VW - dw) // 2, (VH - dh) // 2
 
 
-def _draw_framing_guide(cv: Canvas, area: np.ndarray, runner, s: float, ox: int, oy: int) -> None:
+def _to_canvas(runner, x: float, y: float) -> tuple[float, float]:
+    """Unmirrored frame pixel -> mirrored window pixel."""
+    fw, _fh = runner.frame_size
+    s, _dw, _dh, ox, oy = _stage_transform(runner.frame_size)
+    return VX + ox + (fw - x) * s, VY + oy + y * s
+
+
+def _start_box(runner) -> tuple[tuple[float, float, float, float], bool]:
+    """The start area in unmirrored frame pixels, and whether it was calibrated."""
+    from live.start_area import default_start_area
+
+    custom = getattr(runner, "start_area", None) is not None
+    return (runner.start_area if custom else default_start_area(runner.frame_size)), custom
+
+
+def plate_quad(runner) -> np.ndarray:
+    """The floor plate in window pixels: (4, 2) far-left, far-right, near-right, near-left.
+
+    Near (bottom) edge: the bottom of the start area (foot level), full width. Far edge:
+    PLATE_DEPTH of the start-area height higher and PLATE_TOP_INSET narrower on each side.
+    """
+    from live.start_area import mirror_box_x
+
+    raw, _custom = _start_box(runner)
+    fw, _fh = runner.frame_size
+    mx0, my0, mx1, my1 = mirror_box_x(raw, fw)
+    s, _dw, _dh, ox, oy = _stage_transform(runner.frame_size)
+    x0, x1 = VX + ox + mx0 * s, VX + ox + mx1 * s
+    yb = VY + oy + my1 * s
+    yt = yb - PLATE_DEPTH * (my1 - my0) * s
+    inset = PLATE_TOP_INSET * (x1 - x0)
+    return np.array([[x0 + inset, yt], [x1 - inset, yt], [x1, yb], [x0, yb]], np.float64)
+
+
+def _floor_map(quad: np.ndarray):
+    """Floor (u, v) in 0..1 -> window pixels (a perspective map of the unit square)."""
     import cv2
 
-    from live.start_area import default_start_area, mirror_box_x, standing_guide_lines
+    unit = np.float32([[0, 0], [1, 0], [1, 1], [0, 1]])
+    m = cv2.getPerspectiveTransform(unit, quad.astype(np.float32))
+
+    def project(uv) -> np.ndarray:
+        p = np.asarray(uv, np.float32).reshape(-1, 1, 2)
+        return cv2.perspectiveTransform(p, m).reshape(-1, 2).astype(np.float64)
+
+    return project
+
+
+def ankles_on_plate(runner, quad: np.ndarray | None = None) -> bool:
+    """Both ankles (score >= READY_MIN_SCORE) inside the floor plate (window pixels)."""
+    import cv2
+
+    pts = getattr(runner, "last_points", None)
+    if pts is None:
+        return False
+    quad = plate_quad(runner) if quad is None else quad
+    contour = quad.astype(np.float32).reshape(-1, 1, 2)
+    for i in (b.L_ANKLE, b.R_ANKLE):
+        if float(pts[i, 2]) < READY_MIN_SCORE:
+            return False
+        x, y = _to_canvas(runner, float(pts[i, 0]), float(pts[i, 1]))
+        if cv2.pointPolygonTest(contour, (float(x), float(y)), False) < 0:
+            return False
+    return True
+
+
+def _floor_plate(cv: Canvas, runner, now: float) -> None:
+    """The start area as a fake-3D plate lying on the floor (+ the ~50 % height guide)."""
+    from live.start_area import standing_guide_lines
+
+    quad = plate_quad(runner)
+    if quad[2, 0] - quad[3, 0] < 8 or quad[2, 1] - quad[0, 1] < 4:
+        return
+    raw, custom = _start_box(runner)
+    project = _floor_map(quad)
+    ready = ankles_on_plate(runner, quad)
+    col = GREEN if ready else ACCENT
+
+    # One alpha mask for the fill, grid, outline and bracket glow, painted once (fast at 1080p).
+    import cv2
+
+    ih, iw = cv.img.shape[:2]
+    pad = 8
+    x0 = int(max(0, math.floor(quad[:, 0].min()) - pad))
+    y0 = int(max(0, math.floor(quad[:, 1].min()) - pad))
+    x1 = int(min(iw, math.ceil(quad[:, 0].max()) + pad))
+    y1 = int(min(ih, math.ceil(quad[:, 1].max()) + pad))
+    if x0 >= x1 or y0 >= y1:
+        return
+    m = np.zeros((y1 - y0, x1 - x0), np.uint8)
+
+    def draw(pts, a, thickness=1, closed=False):
+        q = np.round((np.asarray(pts, np.float64) - (x0, y0)) * 4).astype(np.int32)
+        v = int(round(255 * min(a, 1.0)))
+        if thickness < 0:
+            cv2.fillPoly(m, [q], v, cv2.LINE_AA, 2)
+        else:
+            cv2.polylines(m, [q], closed, v, thickness, cv2.LINE_AA, 2)
+
+    draw(quad, 0.10 + (0.22 + 0.16 * _blink(now, 1.5) if ready else 0.0), -1)
+    for k in range(1, PLATE_GRID):  # grid on the floor (fainter toward the far edge)
+        f = k / PLATE_GRID
+        draw(project([(0, f), (1, f)]), 0.25 + 0.25 * f)
+        draw(project([(f, 0), (f, 1)]), 0.35)
+    draw(quad, 0.6, 1, closed=True)
+    draw(quad[2:4], 0.95, 2)  # near edge brighter
+    arm = PLATE_BRACKET  # four corner brackets: right angles on the floor, projected
+    brackets = []
+    for u, v in ((0, 0), (1, 0), (1, 1), (0, 1)):
+        su, sv = (1 if u == 0 else -1), (1 if v == 0 else -1)
+        br = project([(u + su * arm, v), (u, v), (u, v + sv * arm)])
+        brackets.append(br)
+        draw(br, 0.45, 7)
+    cv.paint(x0, y0, m.astype(np.float32)[..., None] * (1 / 255.0), col)
+    for br in brackets:
+        cv.poly(br, _lighten(col, 0.25), 1.0, closed=False, thickness=3)
+
+    label = "Start area" if custom else "Start area (guide)"
+    cv.text(quad[0, 0], quad[0, 1] - 8, label, 14, "semibold", col, "lb", shadow=True)
+    if ready:
+        cv.text(
+            float(quad[1, 0]),
+            float(quad[1, 1]) - 8,
+            "READY",
+            24,
+            "display",
+            GREEN,
+            "rb",
+            alpha=0.65 + 0.35 * _blink(now, 1.5),
+            glow=0.6,
+            neon=0.8,
+        )
 
     fw, fh = runner.frame_size
-    custom = getattr(runner, "start_area", None) is not None
-    raw_box = runner.start_area if custom else default_start_area((fw, fh))
-    mx0, my0, mx1, my1 = mirror_box_x(raw_box, fw)
-    x0, y0 = max(0, int(round(ox + mx0 * s))), max(0, int(round(oy + my0 * s)))
-    x1, y1 = min(VW - 1, int(round(ox + mx1 * s))), min(VH - 1, int(round(oy + my1 * s)))
-    if x1 <= x0 or y1 <= y0:
-        return
-
-    col = GREEN if custom else ACCENT
-    arm = max(12, min(26, (x1 - x0) // 5, (y1 - y0) // 3))
-    corners = (
-        ((x0, y0), (x0 + arm, y0), (x0, y0 + arm)),
-        ((x1, y0), (x1 - arm, y0), (x1, y0 + arm)),
-        ((x0, y1), (x0 + arm, y1), (x0, y1 - arm)),
-        ((x1, y1), (x1 - arm, y1), (x1, y1 - arm)),
-    )
-    for corner, hx, vy in corners:
-        cv2.line(area, corner, hx, col, 2, cv2.LINE_AA)
-        cv2.line(area, corner, vy, col, 2, cv2.LINE_AA)
-    for sx in range(x0 + arm + 8, x1 - arm - 4, 16):
-        cv2.line(area, (sx, y0), (min(sx + 6, x1 - arm), y0), col, 1, cv2.LINE_AA)
-        cv2.line(area, (sx, y1), (min(sx + 6, x1 - arm), y1), col, 1, cv2.LINE_AA)
-
-    start_label = "Start area" if custom else "Start area (guide)"
-    cv.text(
-        VX + x0 + 8,
-        max(VY + 84, VY + y0 - 8),
-        start_label,
-        12,
-        "semibold",
-        col,
-        "lb",
-        shadow=True,
-    )
-
-    y_head, _ = standing_guide_lines((fw, fh), raw_box)
-    yh = int(round(oy + y_head * s))
-    if 0 <= yh < VH:
-        for sx in range(x0, x1, 18):
-            cv2.line(area, (sx, yh), (min(sx + 10, x1), yh), col, 1, cv2.LINE_AA)
+    y_head, _ = standing_guide_lines((fw, fh), raw)
+    _s, _dw, _dh, _ox, oy = _stage_transform(runner.frame_size)
+    yh = VY + oy + y_head * _s
+    if VY <= yh < VY + VH:
+        x0, x1 = float(quad[3, 0]), float(quad[2, 0])
+        for sx in np.arange(x0, x1, 18):
+            cv.poly([(sx, yh), (min(sx + 10, x1), yh)], ACCENT, 0.6, closed=False)
         cv.text(
-            VX + 0.5 * (x0 + x1),
-            max(VY + 86, VY + yh - 8),
+            0.5 * (x0 + x1),
+            max(VY + 86, yh - 8),
             "Target ~50% height",
-            12,
-            "medium",
-            col,
+            14,
+            "semibold",
+            ACCENT,
             "cb",
             shadow=True,
         )
 
 
-def _video(cv: Canvas, runner, view: str) -> None:
+def _video(cv: Canvas, runner, view: str, now: float) -> None:
     import cv2
 
     area = cv.img[VY : VY + VH, VX : VX + VW]
@@ -856,19 +1313,24 @@ def _video(cv: Canvas, runner, view: str) -> None:
         area[:] = NEUTRAL
         return
     if view == "camera" and runner.last_frame is not None:
-        area[:] = LETTERBOX
+        if ox > 0 or oy > 0:  # bars around the picture
+            area[:] = LETTERBOX
         pic = cv2.resize(cv2.flip(runner.last_frame, 1), (dw, dh), interpolation=cv2.INTER_LINEAR)
         x0, y0 = max(0, ox), max(0, oy)  # paste, cutting what falls outside the window
         w, h = min(dw - (x0 - ox), VW - x0), min(dh - (y0 - oy), VH - y0)
         area[y0 : y0 + h, x0 : x0 + w] = pic[y0 - oy : y0 - oy + h, x0 - ox : x0 - ox + w]
+        area[:] = cv2.multiply(area, _vignette(), scale=1 / 255)
     else:
         area[:] = _backdrop()
-    if runner.ctrl.state in ("readiness", "idle", "ready"):
-        _draw_framing_guide(cv, area, runner, s, ox, oy)
+    if runner.ctrl.state in ("readiness", "idle", "ready", "countdown"):
+        _floor_plate(cv, runner, now)
     if runner.last_points is not None:
         pts = runner.last_points.copy()
         pts[:, 0] = np.where(pts[:, 2] > 0, fw - pts[:, 0], 0)
         draw_skeleton(area, pts, s, ox, oy)
+
+
+# ---------------------------------------------------------------------- top bar and window frame
 
 
 def _hud_item(
@@ -878,7 +1340,7 @@ def _hud_item(
     label: str,
     colour=TEXT,
     dot=None,
-    size: int = 13,
+    size: int = 15,
     weight: str = "semibold",
 ) -> float:
     w = measure(label, size, weight) + (13 if dot else 0)
@@ -906,13 +1368,16 @@ def _recording_seconds(runner) -> float:
     return float(buf[-1][0] - buf[0][0])
 
 
-def _top_bar(cv: Canvas, runner) -> None:
+def _top_bar(cv: Canvas, runner, now: float) -> None:
     c = runner.ctrl
-    cv.fade(VX, VY, VW, 110, BG, 0.88, 0.0)
+    cv.fade(VX, VY, VW, 110, BG, 0.9, 0.0)
     x0, cy = VX + PAD, VY + 26
-    w_title = cv.text(x0, cy, "Gross Motor Screening", 17, "semibold", TEXT, "lm", shadow=True)
-    cv.text(x0, cy + 21, "Screening aid · not a diagnosis", 12, "regular", DIM, "lm", shadow=True)
-    limit = x0 + max(w_title, measure("Screening aid · not a diagnosis", 12)) + 24
+    cv.poly([(x0, cy - 9), (x0 + 9, cy - 9), (x0, cy)], ACCENT, 1.0, thickness=-1)
+    title = "GROSS MOTOR SCREENING"
+    w_title = cv.text(x0 + 16, cy, title, 15, "display", TEXT, "lm", shadow=True, neon=0.3)
+    sub = "Screening aid · not a diagnosis"
+    cv.text(x0 + 16, cy + 21, sub, 14, "medium", DIM, "lm", shadow=True)
+    limit = x0 + 16 + max(w_title, measure(sub, 14, "medium")) + 24
 
     paused = c.state == "idle" and bool(getattr(c, "paused", False))
     if paused:
@@ -923,10 +1388,14 @@ def _top_bar(cv: Canvas, runner) -> None:
         name = STATE_NAMES.get(c.state, c.state)
         if c.state == "recording":
             name = f"{name}  {_recording_seconds(runner):4.1f} s"
-        pulse = c.state != "recording" or (time.monotonic() % 1.0) < 0.6
+        pulse = c.state != "recording" or (now % 1.0) < 0.6
         dot_col = colour if pulse else TEXT
 
-    x = _hud_item(cv, VX + VW - PAD, cy, name, colour, dot=dot_col, size=14, weight="semibold")
+    chip_w = measure(name, 16, "bold") + 13 + 24
+    chip_x = VX + VW - PAD - chip_w
+    cv.frame(chip_x, cy - 14, chip_w, 28, 7, colour, fill=SURFACE, fill_alpha=0.7, glow=0.35)
+    _hud_item(cv, VX + VW - PAD - 12, cy, name, colour, dot=dot_col, size=16, weight="bold")
+    x = chip_x - 6
 
     items: list[tuple[str, tuple[int, int, int], tuple[int, int, int] | None, str]] = []
     if c.state != "recording":
@@ -954,21 +1423,32 @@ def _top_bar(cv: Canvas, runner) -> None:
         items.append((f"{c.child} · {c.age} months · consent {c.consent}", TEXT, None, "medium"))
 
     for label, fg, dot, weight in items:
-        w = measure(label, 13, weight) + (13 if dot else 0)
+        w = measure(label, 15, weight) + (13 if dot else 0)
         if x - 20 - w < limit:
             break
-        cv.text(x - 10, cy, "·", 13, "semibold", FAINT, "cm", shadow=True)
-        x = _hud_item(cv, x - 20, cy, label, fg, dot=dot, size=13, weight=weight)
+        cv.text(x - 10, cy, "/", 15, "semibold", LINE, "cm", shadow=True)
+        x = _hud_item(cv, x - 20, cy, label, fg, dot=dot, size=15, weight=weight)
 
 
-def _panel(cv: Canvas, x, y, w, h, alpha=0.90):
-    cv.rrect(x + 2, y + 6, w, h, 14, fill=SHADOW, alpha=0.45)
-    cv.rrect(x, y, w, h, 14, fill=SURFACE, alpha=alpha, border=LINE, border_alpha=0.85)
+def _window_frame(cv: Canvas, colour, alpha: float = 1.0) -> None:
+    """The state colour as HUD brackets in the window corners plus a faint edge line."""
+    cv.ring(VX, VY, VW, VH, 0, 2, colour, alpha * 0.35)
+    arm = min(64, VW // 12)
+    _brackets(cv, VX + 6, VY + 6, VW - 13, VH - 13, arm, colour, th=3, alpha=alpha)
+
+
+# ---------------------------------------------------------------------- setup / readiness / confirm
+
+
+def _panel(cv: Canvas, x, y, w, h, alpha=0.90, colour=ACCENT):
+    cv.paint(int(x) + 4, int(y) + 8, _chamfer_mask(int(w), int(h), 18) * 0.5, SHADOW)
+    cv.frame(x, y, w, h, 18, colour, fill=SURFACE, fill_alpha=alpha, line_alpha=0.85, glow=0.5)
+    _brackets(cv, x - 6, y - 6, w + 12, h + 12, 22, colour, corners=("tr", "bl"), th=2)
 
 
 def _setup_field_boxes(c) -> tuple[int, int, int, int, list[tuple[int, int, int, int]], list[str]]:
     w = 500
-    msg_lines = wrap(c.message, 14, "regular", w - 56, 2)
+    msg_lines = wrap(c.message, 15, "regular", w - 56, 2)
     h = 28 + 34 + 26 + 18 + 3 * 82 + len(msg_lines) * 20 + 24
     x, y = VX + (VW - w) // 2, VY + (VH - h) // 2
     cx = x + 28
@@ -992,7 +1472,7 @@ def _setup_field_hit(c, mx: int, my: int) -> str | None:
     return None
 
 
-def _setup_card(cv: Canvas, c) -> None:
+def _setup_card(cv: Canvas, c, now: float) -> None:
     names = ("Child code", "Age in months", "Consent level")
     lo, hi = AGE_RANGE_MONTHS
     hints = ("e.g. K03", f"{lo}–{hi}", "1 points only · 2 stick figure · 3 + video")
@@ -1000,50 +1480,52 @@ def _setup_card(cv: Canvas, c) -> None:
     _panel(cv, x, y, w, h, 0.94)
     cx = x + 28
     yy = y + 28
-    cv.text(cx, yy, "New child", 26, "semibold", TEXT)
+    cv.text(cx, yy, "New child", 28, "bold", TEXT, neon=0.2)
     yy += 38
     cv.text(
         cx,
         yy,
         "Enter moves to the next field · Backspace or click a box to go back.",
-        14,
+        15,
         "regular",
         DIM,
     )
     yy += 36
-    caret_on = (time.monotonic() % 1.0) < 0.6
+    caret_on = (now % 1.0) < 0.6
     for i, name in enumerate(names):
         focused = i == c.field
-        cv.text(cx, yy, name, 13, "medium", TEXT if focused else DIM)
+        cv.text(cx, yy, name.upper(), 13, "bold", ACCENT if focused else DIM)
         if i == 2:
-            cv.text(x + w - 28, yy, "1 points · 2 stick · 3 video", 13, "regular", FAINT, "rt")
+            cv.text(x + w - 28, yy, "1 points · 2 stick · 3 video", 14, "regular", FAINT, "rt")
         bx, by, bw, bh = boxes[i]
         yy = by
-        cv.rrect(
+        cv.frame(
             bx,
             by,
             bw,
             bh,
-            10,
+            9,
+            ACCENT if focused else LINE,
             fill=RAISED,
-            border=ACCENT if focused else LINE,
-            bw=2 if focused else 1,
+            fill_alpha=0.95,
+            line_alpha=1.0,
+            glow=0.4 if focused else 0.0,
         )
         value = c.form[i]
         tx = bx + 14
         if value:
-            tx += cv.text(tx, by + 23, value, 19, "regular", TEXT, "lm")
+            tx += cv.text(tx, by + 23, value, 21, "semibold", TEXT, "lm")
         elif not focused:
-            cv.text(tx, by + 23, hints[i], 16, "regular", FAINT, "lm")
+            cv.text(tx, by + 23, hints[i], 17, "regular", FAINT, "lm")
         if focused:
             if caret_on:
-                cv.rrect(tx + 2, by + 12, 2, 22, 1, fill=ACCENT)
+                cv.rrect(tx + 2, by + 12, 2, 22, 0, fill=ACCENT)
             if not value:
-                cv.text(tx + 10, by + 23, hints[i], 16, "regular", FAINT, "lm")
+                cv.text(tx + 10, by + 23, hints[i], 17, "regular", FAINT, "lm")
         yy = by + bh + 14
     error = c.message and not c.message.startswith(("Type", "Next child"))
     for line in msg_lines:
-        cv.text(cx, yy, line, 14, "regular", AMBER if error else DIM)
+        cv.text(cx, yy, line, 15, "regular", AMBER if error else DIM)
         yy += 20
 
 
@@ -1056,59 +1538,67 @@ def _icon_ok(cv: Canvas, cx, cy):
 
 
 def _icon_warn(cv: Canvas, cx, cy):
-    cv.dot(cx, cy, 9, AMBER)
-    cv.text(cx, cy, "!", 13, "bold", BG, "cm")
+    cv.poly([(cx, cy - 9), (cx + 9, cy + 7), (cx - 9, cy + 7)], AMBER, 1.0, thickness=-1)
+    cv.text(cx, cy + 1, "!", 13, "bold", BG, "cm")
 
 
 def _readiness_overlay(cv: Canvas, runner) -> None:
     c = runner.ctrl
     custom = getattr(runner, "start_area", None) is not None
     w = 460
-    rows = [wrap(p, 15, "regular", w - 40, 3) for p in c.problems]
+    rows = [wrap(p, 16, "regular", w - 40, 3) for p in c.problems]
     if c.mode == "gesture":
         foot = "Show an open hand to the camera (or press Start, Enter) to start."
     elif not c.problems:
         foot = "Press Start (Enter) when the child is at the start line."
     else:
         foot = "You can start anyway with Start (Enter)."
-    foot_lines = wrap(foot, 14, "regular", w)
+    foot_lines = wrap(foot, 15, "medium", w)
     tip_lines = (
         []
         if custom
         else wrap(
             "Tip: run 'python -m live.start_area' to calibrate the taped floor box.",
-            12,
+            13,
             "regular",
             w,
         )
     )
     body_h = 28 if not rows else sum(len(r) * 21 + 10 for r in rows)
     total_h = 34 + 14 + body_h + 12 + len(foot_lines) * 20 + (len(tip_lines) * 18 + 8)
-    cv.fade_x(0, 48, w + 160, min(H - 96, total_h + 112), BG, 0.84, 0.0, v_feather=64)
+    cv.fade_x(0, 48, w + 160, min(H - 96, total_h + 112), BG, 0.86, 0.0, v_feather=64)
 
     cx, yy = VX + PAD, VY + 92
-    cv.text(cx, yy, "Readiness check", 21, "semibold", TEXT, shadow=True)
-    yy += 38
+    cv.rrect(cx, yy + 2, 3, 22, 0, fill=ACCENT)
+    cv.text(cx + 12, yy, "Readiness check", 24, "bold", TEXT, shadow=True, neon=0.2)
+    yy += 40
     if not rows:
         _icon_ok(cv, cx + 9, yy + 9)
         cv.text(
-            cx + 28, yy + 9, "Camera and child look ready.", 15, "medium", GREEN, "lm", shadow=True
+            cx + 28,
+            yy + 9,
+            "Camera and child look ready.",
+            16,
+            "semibold",
+            GREEN,
+            "lm",
+            shadow=True,
         )
         yy += 30
     for lines in rows:
         _icon_warn(cv, cx + 9, yy + 9)
         for line in lines:
-            cv.text(cx + 28, yy + 9, line, 15, "regular", TEXT, "lm", shadow=True)
+            cv.text(cx + 28, yy + 9, line, 16, "regular", TEXT, "lm", shadow=True)
             yy += 21
         yy += 10
     yy += 6
     for line in foot_lines:
-        cv.text(cx, yy, line, 14, "medium", DIM, shadow=True)
+        cv.text(cx, yy, line, 15, "medium", DIM, shadow=True)
         yy += 20
     if tip_lines:
         yy += 6
         for line in tip_lines:
-            cv.text(cx, yy, line, 12, "regular", FAINT, shadow=True)
+            cv.text(cx, yy, line, 13, "regular", FAINT, shadow=True)
             yy += 18
 
 
@@ -1126,314 +1616,41 @@ def _confirm_card(cv: Canvas, c) -> None:
     corrected = ct != gt or (ct != 3 and cl != gl)
     w, h = 520, 268
     x, y = VX + (VW - w) // 2, VY + (VH - h) // 2
-    _panel(cv, x, y, w, h, 0.94)
+    _panel(cv, x, y, w, h, 0.94, AMBER)
     cx, yy = x + 28, y + 28
-    cv.text(cx, yy, "Check this try", 24, "semibold", TEXT)
+    cv.text(cx, yy, "Check this try", 26, "bold", TEXT)
     yy += 36
-    cv.text(cx, yy, "Correct the task or leg if the guess is wrong, then save.", 14, "regular", DIM)
+    cv.text(cx, yy, "Correct the task or leg if the guess is wrong, then save.", 15, "regular", DIM)
     yy += 38
-    cv.text(cx, yy, "Guess", 13, "medium", DIM)
-    cv.text(x + w - 28, yy, f"{gc:.0%} sure", 13, "medium", DIM, "rt")
+    cv.text(cx, yy, "GUESS", 13, "bold", DIM)
+    cv.text(x + w - 28, yy, f"{gc:.0%} sure", 14, "semibold", DIM, "rt")
     yy += 22
-    cv.text(cx, yy, _task_leg(gt, gl), 17, "regular", TEXT)
+    cv.text(cx, yy, _task_leg(gt, gl), 18, "medium", TEXT)
     yy += 40
-    cv.text(cx, yy, "Will be saved as", 13, "medium", DIM)
+    cv.text(cx, yy, "WILL BE SAVED AS", 13, "bold", ACCENT)
     if corrected:
-        cv.text(x + w - 28, yy, "Corrected", 13, "semibold", AMBER, "rt")
+        cv.text(x + w - 28, yy, "Corrected", 14, "bold", AMBER, "rt")
     yy += 22
-    cv.text(cx, yy, _task_leg(ct, cl), 20, "semibold", TEXT)
+    cv.text(cx, yy, _task_leg(ct, cl), 22, "bold", TEXT)
     yy += 44
     keys = "1/2/3 task · " + ("" if ct == 3 else "L/R leg · ") + "Enter save · Backspace cancel"
-    cv.text(cx, yy, keys, 13, "regular", FAINT)
+    cv.text(cx, yy, keys, 14, "regular", FAINT)
 
 
 def _toast(cv: Canvas, message: str) -> None:
     if not message:
         return
-    lines = wrap(message, 14, "medium", 820, 2)
+    lines = wrap(message, 16, "semibold", 820, 2)
     yy = BAR_Y - 12 - (len(lines) - 1) * 20
     for line in lines:
-        cv.text(VX + VW / 2, yy, line, 14, "medium", TEXT, "cb", shadow=True)
+        cv.text(VX + VW / 2, yy, line, 16, "semibold", TEXT, "cb", shadow=True, glow=0.6)
         yy += 20
 
 
-_BADGE_POS: weakref.WeakKeyDictionary[object, tuple[float, float]] = weakref.WeakKeyDictionary()
+# ---------------------------------------------------------------------- gesture ring and countdown
 
 
-def _shoulder_anchor(runner) -> tuple[tuple[float, float], tuple[float, float], float] | None:
-    """Return ((right_x, right_y), (left_x, left_y), shoulder_span_px) in mirrored canvas coords."""
-    pts = getattr(runner, "last_points", None)
-    if pts is None or len(pts) <= max(b.L_SHOULDER, b.R_SHOULDER):
-        return None
-    fw, _fh = runner.frame_size
-    s, _dw, _dh, ox, oy = _stage_transform(runner.frame_size)
-
-    def to_canvas(idx: int) -> tuple[float, float] | None:
-        if float(pts[idx, 2]) < MIN_SCORE:
-            return None
-        return (VX + ox + (fw - float(pts[idx, 0])) * s, VY + oy + float(pts[idx, 1]) * s)
-
-    found = [p for idx in (b.L_SHOULDER, b.R_SHOULDER) if (p := to_canvas(idx)) is not None]
-    if len(found) == 2:
-        left_p, right_p = sorted(found, key=lambda p: p[0])
-        return right_p, left_p, max(24.0, right_p[0] - left_p[0])
-    if len(found) == 1:
-        return found[0], found[0], 60.0
-    for idx in (b.NECK, b.NOSE):
-        if (p := to_canvas(idx)) is not None:
-            return p, p, 60.0
-    return None
-
-
-def _draw_floating_score_badge(cv: Canvas, runner, live: dict) -> bool:
-    """Lightweight floating shoulder score callout (show_score only)."""
-    import cv2
-
-    anchor = _shoulder_anchor(runner)
-    if anchor is None:
-        return False
-    right_sh, left_sh, span = anchor
-    sc = int(live["score"])
-    task = int(live.get("task") or 1)
-    conf = float(live.get("confidence") or 0.0)
-    col = SCORE_COLOURS[sc]
-    label = SCORE_NAMES[sc]
-    is_rec = runner.ctrl.state == "recording"
-    mode_tag = "Live" if is_rec else "Preview"
-    sub = f"{mode_tag} · {conf:.0%} · {TASK_SHORT.get(task, '')}"
-
-    text_w = max(measure(label, 19, "semibold"), measure(sub, 11, "medium"))
-    bw = int(max(156, 14 + 30 + 12 + text_w + 16))
-    bh = 50
-    stem_dx = int(min(44, max(22, span * 0.26)))
-    stem_dy = 20
-
-    right_edge, left_edge = VX + VW - PAD, VX + PAD
-    if getattr(runner, "result", None) and runner.ctrl.state in ("idle", "ready"):
-        right_edge = VX + VW - PAD - CARD_W - 14
-    top_edge, bot_edge = VY + 84, BAR_Y - 18
-    go_right = right_sh[0] + stem_dx + 14 + bw <= right_edge
-    ax, ay = right_sh if go_right else left_sh
-    tx = (ax + stem_dx + 14) if go_right else (ax - stem_dx - 14 - bw)
-    tx = max(left_edge, min(tx, right_edge - bw))
-    ty = max(top_edge, min(ay - stem_dy - bh / 2, bot_edge - bh))
-
-    prev = _BADGE_POS.get(runner)
-    if prev is None or math.hypot(tx - prev[0], ty - prev[1]) > 260.0:
-        bx, by = tx, ty
-    else:
-        bx = prev[0] + 0.28 * (tx - prev[0])
-        by = prev[1] + 0.28 * (ty - prev[1])
-    _BADGE_POS[runner] = (bx, by)
-
-    elbow_x = int(round(bx - 12)) if go_right else int(round(bx + bw + 12))
-    elbow_y = int(round(by + bh / 2))
-    attach_x = int(round(bx)) if go_right else int(round(bx + bw))
-    cv2.line(cv.img, (int(round(ax)), int(round(ay))), (elbow_x, elbow_y), col, 2, cv2.LINE_AA)
-    cv2.line(cv.img, (elbow_x, elbow_y), (attach_x, elbow_y), col, 2, cv2.LINE_AA)
-    cv.dot(ax, ay, 4.5, col)
-    cv.dot(ax, ay, 2, TEXT)
-
-    cy = by + bh / 2
-    cv.dot(bx + 26, cy, 15, col)
-    cv.text(bx + 26, cy, str(sc), 18, "bold", BG, "cm")
-    cv.text(bx + 50, by + 18, label, 19, "semibold", col, "lm", glow=0.9)
-    cv.text(bx + 50, by + 37, sub, 11, "medium", TEXT, "lm", glow=0.9)
-    return True
-
-
-def _detect_label(
-    detect: dict | None, preset_task: int | None, preset_leg: str | None = None
-) -> str:
-    """'Detecting: hop on one leg · 92%' or pinned task label while a try runs."""
-    if preset_task:
-        base = f"Task set by key: {b.TASKS[preset_task]}"
-        if preset_leg and preset_task != 3:
-            return f"{base} · leg {preset_leg}"
-        return base
-    if not detect:
-        return "Detecting…"
-    return f"Detecting: {b.TASKS[int(detect['task'])]} · {float(detect['confidence']):.0%}"
-
-
-def _detect_hud(cv: Canvas, detect: dict | None, preset_task: int | None, preset_leg: str | None):
-    label = _detect_label(detect, preset_task, preset_leg)
-    col = AMBER if preset_task else ACCENT
-    cv.dot(VX + PAD + 4, VY + 74, 4, col)
-    cv.text(VX + PAD + 16, VY + 74, label, 13, "semibold", col, "lm", shadow=True)
-
-
-def _score_hud(cv: Canvas, runner, view: str = "camera") -> None:
-    c = runner.ctrl
-    if c.state in ("setup", "readiness", "confirm"):
-        return
-    if getattr(runner, "gesture_flow", False):
-        _gesture_hud(cv, runner, view)
-        return
-    if c.state == "recording" and getattr(runner, "auto_flow", False):
-        _detect_hud(cv, getattr(runner, "detect", None), c.preset_task, c.preset_leg)
-    elif (
-        c.state in ("idle", "ready")
-        and getattr(runner, "auto_flow", False)
-        and c.preset_task is not None
-    ):
-        _detect_hud(cv, None, c.preset_task, c.preset_leg)
-
-    live = getattr(runner, "live", None)
-    anchored = False
-    if view != "neutral" and live and "score" in live:
-        anchored = _draw_floating_score_badge(cv, runner, live)
-
-    result = getattr(runner, "result", None)
-    show_result = bool(result and c.state in ("idle", "ready"))
-    show_live_col = not anchored
-    if not show_live_col and not show_result:
-        return
-
-    w = CARD_W
-    x = VX + VW - PAD - w
-    cv.fade_x(x - 140, 48, w + PAD + 140, H - 96, BG, 0.0, 0.86, v_feather=64)
-    y = VY + 92
-    if show_live_col:
-        y = _live_text(cv, live, x, y, w)
-        if show_result:
-            cv.rrect(x, y + 6, w, 1, 0, fill=TEXT, alpha=0.16)
-            y += 20
-    if show_result:
-        _result_text(cv, result, x, y, w)
-
-
-def _live_text(cv: Canvas, live, x, y, w) -> int:
-    if live and "hint" in live:
-        task = live.get("task")
-        detail_lines = wrap(live.get("detail", ""), 13, "regular", w, 3)
-        cv.text(x, y, "READY TO RECORD", 11, "semibold", ACCENT, shadow=True)
-        if task:
-            cv.text(
-                x + w,
-                y,
-                f"Task {int(task)} · {TASK_SHORT.get(int(task), '')}",
-                11,
-                "semibold",
-                DIM,
-                "rt",
-                shadow=True,
-            )
-        y += 22
-        cv.text(x, y, live["hint"], 18, "semibold", TEXT, shadow=True)
-        y += 26
-        for line in detail_lines:
-            cv.text(x, y, line, 13, "regular", DIM, shadow=True)
-            y += 18
-        return y + 8
-
-    if not live or "error" in live:
-        detail = (
-            live["error"] if live else "The score appears after about 1 s of the child in view."
-        )
-        lines = wrap(detail, 13, "regular", w, 3)
-        cv.text(x, y, "LIVE SCORE", 11, "semibold", DIM, shadow=True)
-        y += 22
-        cv.text(x, y, "Waiting for a clear view", 17, "semibold", TEXT, shadow=True)
-        y += 26
-        for line in lines:
-            cv.text(x, y, line, 13, "regular", DIM, shadow=True)
-            y += 18
-        return y + 8
-
-    sc = int(live["score"])
-    task = int(live.get("task") or 1)
-    conf = float(live.get("confidence") or 0.0)
-    col = SCORE_COLOURS[sc]
-    reasons = wrap(live.get("reasons", ""), 13, "regular", w, 3)
-    cv.text(x, y, "LIVE SCORE", 11, "semibold", DIM, shadow=True)
-    cv.text(
-        x + w,
-        y,
-        f"Task {task} · {TASK_SHORT.get(task, '')}",
-        11,
-        "semibold",
-        DIM,
-        "rt",
-        shadow=True,
-    )
-    y += 24
-    num_w = cv.text(x, y, str(sc), 34, "bold", col, "lt", shadow=True)
-    cv.text(x + num_w + 12, y + 3, SCORE_NAMES[sc], 24, "semibold", col, "lt", shadow=True)
-    cv.text(x + num_w + 12, y + 31, f"{conf:.0%} sure", 13, "medium", DIM, "lt", shadow=True)
-    y += 52
-    cv.rrect(x, y, w, 3, 2, fill=TEXT, alpha=0.18)
-    if conf > 0:
-        cv.rrect(x, y, max(6, w * min(conf, 1.0)), 3, 2, fill=col)
-    y += 14
-    for line in reasons:
-        cv.text(x, y, line, 13, "regular", DIM, shadow=True)
-        y += 18
-    return y + 8
-
-
-def _result_text(cv: Canvas, r: dict, x, y, w) -> None:
-    check = r.get("check") or r.get("score") is None
-    reasons = wrap(r.get("reasons", ""), 13, "regular", w, 3)
-    head = _task_leg(r["task"], r["leg"])
-    if check:
-        words = wrap("Model is unsure: check by teacher.", 14, "regular", w, 2)
-        col, verdict = PURPLE, "Check by teacher"
-    else:
-        s = int(r["score"])
-        words = wrap(SCORE_WORDS[s].capitalize() + ".", 14, "regular", w, 2)
-        col, verdict = SCORE_COLOURS[s], f"{s} · {SCORE_NAMES[s]}"
-
-    auto = r.get("auto")
-    pinned = r.get("pinned")
-    cv.text(x, y, "LAST SAVED TRY", 11, "semibold", DIM, shadow=True)
-    if r.get("try"):
-        cv.text(x + w, y, f"Try #{int(r['try'])}", 11, "semibold", DIM, "rt", shadow=True)
-    y += 22
-    if auto:
-        detected = f"Task detected: {b.TASKS[int(auto['task'])]} · {float(auto['confidence']):.0%}"
-        cv.text(x, y, detected, 13, "medium", ACCENT, shadow=True)
-        y += 20
-    elif pinned:
-        cv.text(x, y, "Task prioritized by key", 13, "medium", AMBER, shadow=True)
-        y += 20
-    cv.text(x, y, head, 15, "medium", TEXT, shadow=True)
-    y += 26
-    vw = cv.text(x, y, verdict, 22, "semibold", col, "lt", shadow=True)
-    if not check:
-        cv.text(
-            x + vw + 10,
-            y + 13,
-            f"{float(r.get('confidence') or 0):.0%} sure",
-            13,
-            "medium",
-            DIM,
-            "lm",
-            shadow=True,
-        )
-    y += 34
-    for line in words:
-        cv.text(x, y, line, 14, "regular", TEXT, shadow=True)
-        y += 20
-    y += 4
-    for line in reasons:
-        cv.text(x, y, line, 13, "regular", DIM, shadow=True)
-        y += 18
-    y += 8
-    cv.text(x, y, "Reference only, not a diagnosis.", 11, "regular", FAINT, shadow=True)
-
-
-# ---------------------------------------------------------------------- gesture flow
-
-
-def _to_canvas(runner, x: float, y: float) -> tuple[float, float]:
-    """Unmirrored frame pixel -> mirrored window pixel."""
-    fw, _fh = runner.frame_size
-    s, _dw, _dh, ox, oy = _stage_transform(runner.frame_size)
-    return VX + ox + (fw - x) * s, VY + oy + y * s
-
-
-def _arc(cv: Canvas, cx, cy, r, frac: float, colour, thickness: int = 4) -> None:
+def _arc(cv: Canvas, cx, cy, r, frac: float, colour, thickness: int = 4, start=-90.0) -> None:
     """Clockwise arc from 12 o'clock covering frac (0..1) of a circle."""
     import cv2
 
@@ -1441,7 +1658,7 @@ def _arc(cv: Canvas, cx, cy, r, frac: float, colour, thickness: int = 4) -> None
         return
     c = (int(round(cx * 4)), int(round(cy * 4)))
     ax = (int(round(r * 4)), int(round(r * 4)))
-    cv2.ellipse(cv.img, c, ax, -90, 0, 360 * min(frac, 1.0), colour, thickness, cv2.LINE_AA, 2)
+    cv2.ellipse(cv.img, c, ax, start, 0, 360 * min(frac, 1.0), colour, thickness, cv2.LINE_AA, 2)
 
 
 def _gesture_ring(cv: Canvas, runner) -> None:
@@ -1457,47 +1674,190 @@ def _gesture_ring(cv: Canvas, runner) -> None:
     col = GREEN if g.kind == "palm" else RED
     c4 = (int(round(x * 4)), int(round(y * 4)))
     cv2.circle(cv.img, c4, 30 * 4, SHADOW, 6, cv2.LINE_AA, 2)
-    cv2.circle(cv.img, c4, 30 * 4, TEXT if not g.waiting_for_open else AMBER, 2, cv2.LINE_AA, 2)
+    cv2.circle(cv.img, c4, 30 * 4, ACCENT if not g.waiting_for_open else AMBER, 1, cv2.LINE_AA, 2)
     _arc(cv, x, y, 30, g.progress, col, 5)
     label = g.hint
-    cv.text(
-        x, y + 46, label, 13, "semibold", AMBER if g.waiting_for_open else TEXT, "ct", shadow=True
-    )
+    cv.text(x, y + 46, label, 15, "bold", AMBER if g.waiting_for_open else TEXT, "ct", shadow=True)
 
 
-def _countdown_overlay(cv: Canvas, runner) -> None:
-    """Big 3-2-1 in the middle of the window, with a ring that empties each second."""
+def _segment_ring(cv: Canvas, cx, cy, r, frac: float, colour, n: int = 36) -> None:
+    """A HUD ring of n segments; the first frac of them (clockwise from 12) are lit."""
+    lit = math.ceil(frac * n - 1e-6)
+    step = 360.0 / n
+    for i in range(n):
+        start = -90.0 + i * step
+        on = i < lit
+        _arc(cv, cx, cy, r, (step - 3.5) / 360.0, colour if on else LINE, 9 if on else 5, start)
+
+
+def _countdown_overlay(cv: Canvas, runner, now: float) -> None:
+    """Glitching neon 3-2-1 in the middle of the window, in a segmented ring."""
     left = runner.countdown_left() if hasattr(runner, "countdown_left") else None
     if left is None:
         return
     n = max(1, min(3, math.ceil(left - 1e-6))) if left > 0 else 1
-    frac = left - (n - 1)
+    frac = _clip01(left - (n - 1))  # 1 -> 0 during each digit
+    p = 1.0 - frac  # time into this digit
     cx, cy, r = VX + VW / 2, VY + VH / 2 - 20, 132
-    cv.rrect(cx - r - 10, cy - r - 10, 2 * r + 20, 2 * r + 20, r + 10, fill=BG, alpha=0.62)
-    import cv2
+    disc = _rr_mask(2 * r + 40, 2 * r + 40, r + 20)
+    cv.paint(int(cx - r - 20), int(cy - r - 20), disc * 0.62, BG)
+    _arc(cv, cx, cy, r + 16, 1.0, ACCENT, 1)
+    for k in range(12):  # outer ticks
+        a = math.radians(k * 30 - 90 + (now * 40) % 30)
+        x0, y0 = cx + (r + 22) * math.cos(a), cy + (r + 22) * math.sin(a)
+        x1, y1 = cx + (r + 30) * math.cos(a), cy + (r + 30) * math.sin(a)
+        cv.poly([(x0, y0), (x1, y1)], ACCENT, 0.8, closed=False, thickness=2)
+    _segment_ring(cv, cx, cy, r, frac, ACCENT)
+    _arc(cv, cx, cy, r - 16, 1.0, LINE, 1)
 
-    cv2.circle(
-        cv.img,
-        (int(cx * 4), int(cy * 4)),
-        int(r * 4),
-        _lighten(BG, 0.25),
-        6,
-        cv2.LINE_AA,
-        2,
-    )
-    _arc(cv, cx, cy, r, frac, AMBER, 8)
-    cv.text(cx, cy, str(n), 190, "bold", TEXT, "cm", shadow=True)
-    cv.text(cx, cy + r + 34, "Get ready", 24, "semibold", AMBER, "ct", shadow=True)
+    glitch = 1.0 - _seg(p, 0.0, 0.15)  # glitch in at the start of each digit
+    alpha = 0.35 + 0.65 * _seg(p, 0.0, 0.12)
+    digit = str(n)
+    size = 170
+    cv.text(cx, cy, digit, size, "display", ACCENT, "cm", alpha=alpha, neon=1.0, glow=0.5)
+    cv.text(cx, cy, digit, size, "display", TEXT, "cm", alpha=alpha * 0.85, record=False)
+    if glitch > 0:
+        gw = measure(digit, size, "display") + 60
+        _glitch(cv, cx - gw / 2, cy - size * 0.6, gw, size * 1.2, glitch, int(now * 30) + n)
+    cv.text(cx, cy + r + 40, "Get ready", 26, "bold", ACCENT, "ct", shadow=True, neon=0.5)
     cv.text(
         cx,
-        cy + r + 68,
+        cy + r + 74,
         "Recording starts at 0 · Backspace cancels",
-        14,
-        "regular",
+        15,
+        "medium",
         DIM,
         "ct",
         shadow=True,
     )
+
+
+def _go_overlay(cv: Canvas, a: _Anim, now: float) -> None:
+    p = (now - a.go_since) / GO_S
+    if not 0 <= p < 1:
+        return
+    size = int(120 + 70 * _ease_out(p))
+    alpha = 1.0 - _seg(p, 0.55, 1.0)
+    cx, cy = VX + VW / 2, VY + VH / 2 - 20
+    cv.text(cx, cy, "GO", size, "display", GREEN, "cm", alpha=alpha, neon=1.0, glow=0.5)
+    if p < 0.2:
+        gw = measure("GO", size, "display") + 60
+        _glitch(cv, cx - gw / 2, cy - size * 0.6, gw, size * 1.2, 1 - p / 0.2, int(now * 30))
+
+
+# ---------------------------------------------------------------------- task panel (detection)
+
+
+def _task_content(runner, show_score: bool) -> tuple | None:
+    """(task or None, sub line, colour) for the task panel, or None when it is not shown.
+
+    Testing mode (show_score False) uses only the Controller: the task set by key, else
+    'TASK ?'. It never reads runner.detect or runner.live."""
+    c = runner.ctrl
+    frames = runner.splitter.current() if getattr(runner, "splitter", None) else None
+    in_attempt = c.state == "recording" or bool(frames)
+    if c.preset_task is not None and c.state in ("idle", "ready", "recording"):
+        leg = f" · leg {c.preset_leg}" if c.preset_leg and c.preset_task != 3 else ""
+        return c.preset_task, f"Set by key{leg}", AMBER
+    if not in_attempt:
+        return None
+    if not show_score:
+        return None, "AUTO", ACCENT
+    detect = getattr(runner, "detect", None)
+    if detect:
+        return int(detect["task"]), f"Detected · {float(detect['confidence']):.0%}", ACCENT
+    live = getattr(runner, "live", None)
+    if live and live.get("task") and "score" in live:
+        return int(live["task"]), "Detected", ACCENT
+    return None, "Detecting…", ACCENT
+
+
+TASK_PANEL_W, TASK_PANEL_H = 300, 104
+
+
+def _task_panel_rect() -> tuple[int, int, int, int]:
+    return VX + VW - PAD - TASK_PANEL_W, VY + 66, TASK_PANEL_W, TASK_PANEL_H
+
+
+def _task_panel_text(cv: Canvas, content: tuple, x, y, w, alpha: float, record: bool) -> None:
+    task, sub, col = content
+    head = f"TASK {task}" if task else "TASK ?"
+    name = b.TASKS[task].upper() if task else "WAITING FOR MOVEMENT"
+    cv.text(x + 20, y + 16, head, 34, "display", TEXT, "lt", alpha, neon=0.6, record=record)
+    cv.text(x + 20, y + 60, name, 17, "bold", ACCENT, "lt", alpha, record=record)
+    cv.text(x + w - 16, y + 84, sub, 14, "semibold", col, "rt", alpha, record=record)
+
+
+def _task_panel(cv: Canvas, runner, show_score: bool, a: _Anim, now: float) -> int | None:
+    """Top right: TASK n big and its name; glitch swap when the task changes. Returns its bottom."""
+    content = _task_content(runner, show_score)
+    key = None if content is None else (content[0], content[1].split(" ·")[0])
+    if key != a.task_key:
+        a.task_old = a.task_content if a.task_key is not None else None
+        a.task_key, a.task_since = key, now
+    a.task_content = content
+    if content is None:
+        return None
+    x, y, w, h = _task_panel_rect()
+    cv.frame(x, y, w, h, 14, ACCENT, fill=SURFACE, fill_alpha=0.72, glow=0.5)
+    _brackets(cv, x - 5, y - 5, w + 10, h + 10, 16, ACCENT, corners=("tr", "bl"), th=2)
+    cv.rrect(x + 9, y + 20, 3, 32, 0, fill=ACCENT, alpha=0.9)
+    p = (now - a.task_since) / TASK_SWAP_S
+    if p < 0.5 and a.task_old is not None:
+        _task_panel_text(cv, a.task_old, x, y, w, 1.0 - _seg(p, 0.0, 0.5), record=False)
+        _glitch(cv, x + 4, y + 4, w - 8, h - 8, 1.0 - p, int(now * 30))
+        _task_panel_text(cv, content, x, y, w, 0.0, record=True)
+    else:
+        _task_panel_text(cv, content, x, y, w, _flicker(_seg(p, 0.5, 1.0)), record=True)
+    return y + h
+
+
+# ---------------------------------------------------------------------- evaluation bar
+
+
+def _eval_bar(cv: Canvas, runner, a: _Anim, now: float) -> None:
+    """Left edge: stacked Perfect / Good / Bad heights = live probabilities (show_score only)."""
+    live = getattr(runner, "live", None) or {}
+    proba = live.get("proba")
+    target = None if proba is None else np.asarray(proba, np.float64)
+    dt = 0.0 if a.t_last is None else now - a.t_last
+    if target is not None:
+        a.bar = target.copy() if a.bar is None else _approach(a.bar, target, dt)
+    bw, bh = 16, int(VH * 0.45)
+    x, y = VX + PAD + 4, VY + (VH - bh) // 2
+    cv.frame(x - 5, y - 5, bw + 10, bh + 10, 6, ACCENT, fill=BG, fill_alpha=0.75, glow=0.4)
+    cv.text(x + bw / 2, y - 14, "EVAL", 12, "bold", ACCENT, "cb", shadow=True)
+    if a.bar is None or target is None or float(np.sum(a.bar)) <= 1e-6:
+        msg = live.get("error") if live else None
+        cv.text(
+            x + bw + 14, y + bh / 2, "WAITING FOR A CLEAR VIEW", 13, "bold", DIM, "lm", shadow=True
+        )
+        if msg:
+            cv.text(x + bw + 14, y + bh / 2 + 18, msg, 12, "regular", FAINT, "lm", shadow=True)
+        return
+    p = np.clip(a.bar, 0, None)
+    p = p / max(float(p.sum()), 1e-6)
+    hb, hg = bh * p[0], bh * p[1]
+    hp = bh - hb - hg
+    cv.rrect(x, y, bw, hp, 0, fill=GREEN, alpha=0.95)
+    cv.rrect(x, y + hp, bw, hg, 0, fill=LIME, alpha=0.95)
+    cv.rrect(x, y + hp + hg, bw, hb, 0, fill=RED, alpha=0.95)
+    for yy in (y + hp, y + hp + hg):
+        cv.rrect(x, yy - 1, bw, 2, 0, fill=BG, alpha=0.9)
+    for k in range(1, 4):  # quarter ticks
+        cv.rrect(x + bw + 2, y + bh * k / 4, 5, 1, 0, fill=ACCENT, alpha=0.6)
+    lead = int(np.argmax(target))
+    col = SCORE_COLOURS[lead]
+    centres = (y + hp + hg + hb / 2, y + hp + hg / 2, y + hp / 2)
+    ly = float(min(max(centres[lead], y + 14), y + bh - 14))
+    cv.poly(
+        [(x + bw + 8, ly), (x + bw + 15, ly - 6), (x + bw + 15, ly + 6)], col, 1.0, thickness=-1
+    )
+    cv.text(x + bw + 20, ly, f"{target[lead]:.0%}", 22, "bold", col, "lm", glow=0.8, neon=0.5)
+    cv.text(x + bw + 20, ly + 20, SCORE_NAMES[lead].upper(), 12, "bold", col, "lm", glow=0.8)
+
+
+# ---------------------------------------------------------------------- result box and sidebar
 
 
 def _verdict(r: dict) -> tuple[str, tuple[int, int, int]]:
@@ -1530,39 +1890,219 @@ def _score_words(r: dict) -> tuple[str, str, tuple[int, int, int]]:
     )
 
 
-def _attempt_moment(cv: Canvas, r: dict, a: float) -> None:
-    """The attempt that just ended, in large type at the top middle (no box)."""
-    if a <= 0:
-        return
+def _observations(reasons) -> list[str]:
+    """2-3 short lines from the explain() reasons (a preview, not the report)."""
+    parts = []
+    for chunk in str(reasons or "").replace(";", ",").split(","):
+        chunk = chunk.strip().rstrip(".")
+        if chunk:
+            parts.append(chunk[0].upper() + chunk[1:])
+    if not parts:
+        parts = ["No observations yet", "The full timeline is in the saved try"]
+    return parts[:3]
+
+
+@dataclass
+class _Box:
+    """One result for the centred box (and its sidebar row)."""
+
+    task: int
+    word: str = ""
+    word_col: tuple = ACCENT
+    small: str = ""
+    headline: str = ""
+    tag: tuple | None = None  # (text, colour, dot)
+    obs: list = field(default_factory=list)
+
+
+def _box_from_result(r: dict, show_score: bool) -> _Box:
     task = int(r["task"])
+    if not show_score:
+        return _Box(task, "SAVED", ACCENT, "", "", None, [])
     word, small, col = _score_words(r)
-    cx = VX + VW / 2
-    big = 64 if len(word) < 10 else 46
-    head = f"TASK {task} · {b.TASKS[task].upper()}"
-    detail = f"{r.get('headline', '')}  ·  {small}"
-    cv.text(cx, VY + 102, head, 13, "semibold", TEXT, "cm", alpha=a, glow=0.9)
-    cv.text(cx, VY + 162, word, big, "bold", col, "cm", alpha=a, glow=0.85)
-    cv.text(cx, VY + 214, detail, 18, "medium", TEXT, "cm", alpha=a, glow=0.9)
-    tag, tag_col = ("● Recorded", RED) if r.get("recorded") else ("Not recorded", DIM)
-    cv.text(cx, VY + 240, tag, 12, "semibold", tag_col, "cm", alpha=a, glow=0.9)
+    tag = None
+    if "recorded" in r:
+        tag = ("Recorded", RED, True) if r.get("recorded") else ("Not recorded", DIM, False)
+    return _Box(task, word, col, small, r.get("headline", ""), tag, _observations(r.get("reasons")))
 
 
-def _attempt_rows(cv: Canvas, rows: list[dict], title: str, x, y, w) -> int:
-    cv.text(x, y, title, 11, "semibold", DIM, shadow=True)
-    y += 24
-    for r in rows:
-        task = int(r["task"])
-        verdict, col = _verdict(r)
-        cv.text(x, y, f"Task {task} · {TASK_SHORT[task]}", 15, "semibold", TEXT, shadow=True)
-        cv.text(x + w, y, verdict, 15, "semibold", col, "rt", shadow=True)
+BOX_W = 560
+
+
+def _box_size(box: _Box) -> tuple[int, int]:
+    h = 28 + 44 + 30 + 60 + 26
+    if box.headline or box.tag:
+        h += 24
+    if box.obs:
+        h += 30 + 22 * len(box.obs)
+    return BOX_W, h + 18
+
+
+def _box_content(cv: Canvas, box: _Box, x, y, w, alpha: float) -> None:
+    cx = x + w / 2
+    yy = y + 28
+    cv.text(cx, yy, f"TASK {box.task}", 34, "display", TEXT, "ct", alpha, neon=0.6, glow=0.4)
+    yy += 44
+    cv.text(cx, yy, b.TASKS[box.task].upper(), 18, "bold", ACCENT, "ct", alpha)
+    yy += 30
+    big = 50 if len(box.word) < 10 else 34
+    cv.text(cx, yy + 28, box.word, big, "display", box.word_col, "cm", alpha, neon=0.9, glow=0.4)
+    yy += 60
+    if box.small:
+        cv.text(cx, yy, box.small, 17, "semibold", TEXT, "ct", alpha)
+    yy += 26
+    if box.headline or box.tag:
+        parts = []
+        if box.headline:
+            parts.append(box.headline)
+        line = "  ·  ".join(parts)
+        tw = measure(line, 15, "medium") if line else 0
+        tag_w = 0
+        if box.tag:
+            tag_w = (
+                measure(box.tag[0], 14, "bold") + (14 if box.tag[2] else 0) + (16 if line else 0)
+            )
+        tx = cx - (tw + tag_w) / 2
+        if line:
+            cv.text(tx, yy, line, 15, "medium", DIM, "lt", alpha)
+            tx += tw + 16
+        if box.tag:
+            text, col, dot = box.tag
+            if dot and alpha > 0:
+                cv.dot(tx + 4, yy + 10, 4, col)
+            cv.text(tx + (14 if dot else 0), yy, text, 14, "bold", col, "lt", alpha)
+        yy += 24
+    if box.obs:
+        yy += 6
+        cv.rrect(x + 28, yy + 8, w - 56, 1, 0, fill=LINE, alpha=alpha)
+        cv.text(x + 28, yy - 2, "OBSERVATIONS", 13, "bold", ACCENT, "lt", alpha)
+        cv.text(x + w - 28, yy - 2, "preview", 13, "semibold", FAINT, "rt", alpha)
+        yy += 22
+        for line in box.obs:
+            for part in wrap(line, 15, "medium", w - 80, 1):
+                cv.text(x + 34, yy, "›", 15, "bold", ACCENT, "lt", alpha)
+                cv.text(x + 50, yy, part, 15, "medium", DIM, "lt", alpha)
+            yy += 22
+
+
+def _result_box(cv: Canvas, box: _Box, p_in: float, q_out: float, target, now: float) -> None:
+    """The big centred box: opens (p_in 0..1), closes and flies to target (q_out 0..1)."""
+    w, h = _box_size(box)
+    x, y = VX + (VW - w) / 2, VY + (VH - h) / 2 - 20
+    cx, cy = x + w / 2, y + h / 2
+    if q_out <= 0:
+        o = _ease_out(_seg(p_in, 0.0, 0.42))  # scan-line strip opens from the centre
+        k = _ease_out(_seg(p_in, 0.17, 0.58))  # brackets slide out to the corners
+        blink = _seg(p_in, 0.5, 0.75)
+        line_a = 1.0 if blink in (0.0, 1.0) else (1.0 if int(blink * 4) % 2 else 0.2)
+        content = _flicker(_seg(p_in, 0.67, 1.0))
+        hh = max(4.0, h * o)
+        fx, fy, fw, fh = x, cy - hh / 2, w, hh
+        fill_a = 0.86
+        alpha_all = 1.0
+    else:
+        blink = _seg(q_out, 0.0, 0.2)
+        line_a = 1.0 if blink in (0.0, 1.0) else (1.0 if int(blink * 4) % 2 else 0.2)
+        k = 1.0 - _ease(_seg(q_out, 0.2, 0.5))  # brackets slide toward each other and close
+        content = 1.0 - _seg(q_out, 0.1, 0.3)
+        f = _ease(_seg(q_out, 0.5, 1.0))  # collapse and fly into the sidebar
+        tx, ty, tw, th = target
+        hh = h + (th - h) * f
+        fw = w + (tw - w) * f
+        fx = x + (tx - x) * f
+        fy = (cy - hh / 2) + (ty - (cy - th / 2)) * f
+        fh = hh
+        fill_a = 0.86
+        alpha_all = 1.0 - 0.4 * f
+    cv.frame(
+        fx,
+        fy,
+        fw,
+        fh,
+        18,
+        ACCENT,
+        fill=SURFACE,
+        fill_alpha=fill_a * alpha_all,
+        line_alpha=line_a * alpha_all,
+        glow=0.6 * line_a * alpha_all,
+    )
+    if q_out <= 0 and p_in < 0.5:  # the opening strip shows bright scan lines
+        for yy in np.arange(fy + 2, fy + fh - 2, 4):
+            cv.rrect(fx + 6, yy, fw - 12, 1, 0, fill=ACCENT, alpha=0.18)
+    # two brackets: top-left and bottom-right, sliding between the centre and the corners
+    arm = 34 * max(k, 0.15)
+    bl = (cx + (x - 10 - cx) * k, cy + (y - 10 - cy) * k)
+    br = (cx + (x + w + 10 - cx) * k, cy + (y + h + 10 - cy) * k)
+    if q_out < 0.5 and k > 0.02:
+        cv.poly([(bl[0] + arm, bl[1]), bl, (bl[0], bl[1] + arm)], ACCENT, line_a, False, 3)
+        cv.poly([(br[0] - arm, br[1]), br, (br[0], br[1] - arm)], ACCENT, line_a, False, 3)
+    _box_content(cv, box, x, y, w, content if q_out <= 0 or content > 0 else 0.0)
+
+
+SIDEBAR_ROW_H = 54
+
+
+def _sidebar_geom(top: int) -> tuple[int, int, int]:
+    """(x, y of the first row, width) of the right sidebar."""
+    w = CARD_W
+    return VX + VW - PAD - w, top + 30, w
+
+
+def _history_rows(
+    cv: Canvas,
+    rows: list[dict],
+    title: str,
+    top: int,
+    flash: float,
+    extra: list[str],
+    reserve: bool = False,
+) -> None:
+    """Right sidebar: one cyber row per attempt, newest on top; the newest flashes on landing.
+
+    reserve: keep the top slot free for the result box that is flying in."""
+    x, y, w = _sidebar_geom(top)
+    cv.fade_x(x - 140, top - 20, w + PAD + 140, H - top - 60, BG, 0.0, 0.8, v_feather=64)
+    cv.rrect(x, top + 4, 3, 14, 0, fill=ACCENT)
+    cv.text(x + 10, top + 11, title, 13, "bold", ACCENT, "lm", shadow=True)
+    for line in extra:
+        cv.text(x, y + 4, line, 14, "semibold", DIM, "lt", shadow=True)
         y += 22
-        cv.text(x, y, r.get("headline", ""), 13, "regular", DIM, shadow=True)
-        y += 26
-    return y
+    if reserve:
+        y += SIDEBAR_ROW_H
+    for i, r in enumerate(reversed(rows)):
+        if y + SIDEBAR_ROW_H > BAR_Y - 40:
+            break
+        task = int(r["task"])
+        word, _small, col = _score_words(r)
+        fl = flash if i == 0 else 0.0
+        line_col = _mix(ACCENT, TEXT, fl)
+        cv.frame(
+            x,
+            y,
+            w,
+            SIDEBAR_ROW_H - 8,
+            10,
+            line_col,
+            fill=_mix(SURFACE, ACCENT, 0.35 * fl),
+            fill_alpha=0.78,
+            line_alpha=0.5 + 0.5 * fl,
+            glow=0.2 + 0.8 * fl,
+        )
+        cv.rrect(x + 1, y + 10, 3, SIDEBAR_ROW_H - 28, 0, fill=col)
+        cv.text(x + 14, y + 15, f"T{task} {TASK_SHORT[task].upper()}", 17, "bold", TEXT, "lm")
+        cv.text(x + w - 12, y + 15, word.upper(), 17, "bold", col, "rm", neon=0.3)
+        when = r.get("headline") or (f"{float(r['duration_s']):.1f} s" if "duration_s" in r else "")
+        if not when and r.get("try"):
+            when = f"Try #{int(r['try'])}"
+        cv.text(x + 14, y + 34, when, 13, "medium", DIM, "lm")
+        if r.get("try") and r.get("headline"):
+            cv.text(x + w - 12, y + 34, f"Try #{int(r['try'])}", 13, "medium", FAINT, "rm")
+        y += SIDEBAR_ROW_H
+    cv.text(x, y + 4, "Reference only, not a diagnosis.", 13, "medium", FAINT, shadow=True)
 
 
 def _summary_moment(cv: Canvas, summary: dict, a: float) -> None:
-    """After the X: the saved attempts in large type over the dimmed picture (no box)."""
+    """After the X: the saved attempts over the dimmed picture, in a HUD frame."""
     if a <= 0:
         return
     rows = summary.get("rows", [])
@@ -1571,25 +2111,38 @@ def _summary_moment(cv: Canvas, summary: dict, a: float) -> None:
     n = len(rows)
     total = 92 + max(n, 1) * 64 + 40
     y = VY + (VH - total) / 2
+    fw = 640
+    cv.frame(
+        cx - fw / 2,
+        y - 30,
+        fw,
+        total + 40,
+        20,
+        ACCENT,
+        fill=SURFACE,
+        fill_alpha=0.7 * a,
+        line_alpha=a,
+        glow=0.5 * a,
+    )
     if not rows:
-        cv.text(cx, y + 20, "No task found in this recording", 30, "semibold", TEXT, "cm", alpha=a)
+        cv.text(cx, y + 20, "No task found in this recording", 30, "bold", TEXT, "cm", alpha=a)
         cv.text(
             cx,
             y + 62,
             "Nothing was saved. Show an open hand to try again.",
-            16,
+            17,
             "regular",
             DIM,
             "cm",
             alpha=a,
         )
         return
-    cv.text(cx, y + 20, "Recording saved", 34, "semibold", TEXT, "cm", alpha=a, glow=0.7)
+    cv.text(cx, y + 20, "Recording saved", 36, "bold", TEXT, "cm", alpha=a, neon=0.4)
     cv.text(
         cx,
         y + 56,
         f"{n} {'try' if n == 1 else 'tries'} · one per task",
-        15,
+        16,
         "medium",
         DIM,
         "cm",
@@ -1601,46 +2154,141 @@ def _summary_moment(cv: Canvas, summary: dict, a: float) -> None:
         task = int(r["task"])
         word, small, col = _score_words(r)
         title = f"Task {task} · {b.TASKS[task]}"
-        cv.text(cx - 22, y, title, 20, "semibold", TEXT, "rm", alpha=a, glow=0.7)
-        cv.text(cx - 22, y + 24, r.get("headline", ""), 14, "regular", DIM, "rm", alpha=a, glow=0.7)
-        cv.text(cx + 22, y, word, 24, "bold", col, "lm", alpha=a, glow=0.7)
-        cv.text(cx + 22, y + 24, small, 14, "regular", DIM, "lm", alpha=a, glow=0.7)
+        cv.text(cx - 22, y, title, 21, "bold", TEXT, "rm", alpha=a, glow=0.7)
+        cv.text(cx - 22, y + 24, r.get("headline", ""), 15, "regular", DIM, "rm", alpha=a, glow=0.7)
+        cv.text(cx + 22, y, word, 26, "bold", col, "lm", alpha=a, glow=0.7, neon=0.4)
+        cv.text(cx + 22, y + 24, small, 15, "regular", DIM, "lm", alpha=a, glow=0.7)
         y += 64
-    cv.text(cx, y + 10, "Reference only, not a diagnosis.", 12, "regular", FAINT, "cm", alpha=a)
+    cv.text(cx, y + 10, "Reference only, not a diagnosis.", 13, "regular", FAINT, "cm", alpha=a)
 
 
-def _gesture_hud(cv: Canvas, runner, view: str) -> None:
-    """show_score in gesture mode: live badge, attempt card, attempt list, summary."""
+# ---------------------------------------------------------------------- the HUD of one picture
+
+
+def _same_bout(r: dict, card: dict | None) -> bool:
+    return card is not None and r.get("bout") is not None and r.get("bout") is card.get("bout")
+
+
+def _box_phase_stream(runner, card: dict) -> tuple[float, float]:
+    now = float(getattr(runner, "now", 0.0))
+    p_in = (now - card["since"]) / BOX_IN_S
+    q_out = 1.0 - (card["until"] - now) / BOX_OUT_S
+    return _clip01(p_in), _clip01(q_out)
+
+
+def _box_phase_clock(since: float, now: float) -> tuple[float, float] | None:
+    t = now - since
+    if t < 0 or t >= BOX_SHOW_S:
+        return None
+    return _clip01(t / BOX_IN_S), _clip01(1.0 - (BOX_SHOW_S - t) / BOX_OUT_S)
+
+
+def _flash_amount(dt: float) -> float:
+    """Row flash 0..1 for dt seconds after the result landed."""
+    if not 0 <= dt < ROW_FLASH_S:
+        return 0.0
+    return (1.0 - dt / ROW_FLASH_S) * (1.0 if int(dt / 0.1) % 2 == 0 else 0.5)
+
+
+def _gesture_hud(cv: Canvas, runner, a: _Anim, now: float, top: int) -> None:
+    """show_score in gesture mode: result box, attempts of the recording, summary."""
     c = runner.ctrl
-    frames = runner.splitter.current() if getattr(runner, "splitter", None) else None
-    if frames:
-        _detect_hud(cv, getattr(runner, "detect", None), c.preset_task, c.preset_leg)
-    elif c.preset_task is not None:
-        _detect_hud(cv, None, c.preset_task, c.preset_leg)
-
-    live = getattr(runner, "live", None)
-    if view != "neutral" and frames and live and "score" in live:
-        _draw_floating_score_badge(cv, runner, live)
-
     summary = runner.summary_card()
     if summary is not None:
         _summary_moment(cv, summary, _fade(runner, summary))
         return
     card = runner.card()
-    if card is not None:
-        _attempt_moment(cv, card, _fade(runner, card))
-
     if c.state == "recording":
         rows, title = list(runner.rec_bouts), "THIS RECORDING"
     else:
         rows, title = list(runner.preview_bouts), "DETECTED · NOT RECORDED"
-    if not rows:
+    shown = [r for r in rows if not _same_bout(r, card)]
+    last = getattr(runner, "intermezzo", None)
+    flash = 0.0
+    if card is None and last is not None and shown and _same_bout(shown[-1], last):
+        flash = _flash_amount(float(getattr(runner, "now", 0.0)) - last["until"])
+    if shown or (card is not None and rows):
+        _history_rows(cv, shown, title, top, flash, [], reserve=card is not None)
+    if card is not None:
+        x, y, w = _sidebar_geom(top)
+        p_in, q_out = _box_phase_stream(runner, card)
+        _result_box(
+            cv, _box_from_result(card, True), p_in, q_out, (x, y, w, SIDEBAR_ROW_H - 8), now
+        )
+
+
+def _classic_hud(cv: Canvas, runner, a: _Anim, now: float, top: int) -> None:
+    """show_score in manual/auto mode: hint, result box after a save, saved tries of the child."""
+    c = runner.ctrl
+    if a.child != c.child:
+        a.child, a.history = c.child, []
+    result = getattr(runner, "result", None)
+    if result is not None:
+        key = result.get("try")
+        if key != a.result_key:
+            a.result_key, a.result_since = key, now
+            a.history = [h for h in a.history if h.get("try") != key] + [dict(result)]
+    live = getattr(runner, "live", None)
+    hint = live if live and "hint" in live else None
+    if c.state not in ("idle", "ready"):
         return
-    w = CARD_W
-    x = VX + VW - PAD - w
-    cv.fade_x(x - 140, 48, w + PAD + 140, H - 96, BG, 0.0, 0.86, v_feather=64)
-    y = _attempt_rows(cv, rows, title, x, VY + 92, w)
-    cv.text(x, y + 2, "Reference only, not a diagnosis.", 11, "regular", FAINT, shadow=True)
+    rows = list(a.history)
+    phase = _box_phase_clock(a.result_since, now) if result is not None else None
+    extra: list[str] = []
+    if hint:
+        extra.append(hint["hint"])
+        extra += wrap(hint.get("detail", ""), 13, "regular", CARD_W, 3)
+    if result is not None:
+        if result.get("auto"):
+            auto = result["auto"]
+            extra.append(
+                f"Task detected: {b.TASKS[int(auto['task'])]} · {float(auto['confidence']):.0%}"
+            )
+        elif result.get("pinned"):
+            extra.append("Task prioritized by key")
+    flying = phase is not None and phase[1] < 1.0
+    shown = rows[:-1] if flying and rows else rows
+    flash = 0.0
+    if result is not None and not flying:
+        flash = _flash_amount(now - (a.result_since + BOX_SHOW_S))
+    if rows or extra:
+        title = "LAST SAVED TRY" if result is not None else "READY TO RECORD"
+        _history_rows(cv, shown, title, top, flash, extra, reserve=flying)
+    if flying and result is not None:
+        x, y, w = _sidebar_geom(top)
+        y += 22 * len(extra)
+        _result_box(
+            cv,
+            _box_from_result(result, True),
+            phase[0],
+            phase[1],
+            (x, y, w, SIDEBAR_ROW_H - 8),
+            now,
+        )
+
+
+def _testing_box(cv: Canvas, runner, a: _Anim, now: float) -> None:
+    """Testing mode: a result box with the task only (never a score) after a try is saved."""
+    c = runner.ctrl
+    card = runner.card() if hasattr(runner, "card") else None
+    target = (VX + VW - PAD - CARD_W, VY + VH / 2, CARD_W, SIDEBAR_ROW_H - 8)
+    if card is not None:
+        p_in, q_out = _box_phase_stream(runner, card)
+        box = _Box(int(card["task"]), "DETECTED", ACCENT)
+        _result_box(cv, box, p_in, q_out, target, now)
+        return
+    if c.state == "confirm":
+        a.saved_task = c.choice_task
+    if a.tries_saved is None:
+        a.tries_saved = c.tries_saved
+    if c.tries_saved > a.tries_saved:
+        a.saved_since = now
+        a.saved_task = a.saved_task or c.choice_task
+    a.tries_saved = c.tries_saved
+    phase = _box_phase_clock(a.saved_since, now)
+    if phase is None or a.saved_task not in (1, 2, 3) or c.state not in ("idle", "ready"):
+        return
+    _result_box(cv, _Box(int(a.saved_task), "SAVED", ACCENT), phase[0], phase[1], target, now)
 
 
 def render(runner, view: str = "stick", show_score: bool = False) -> Canvas:
@@ -1650,29 +2298,51 @@ def render(runner, view: str = "stick", show_score: bool = False) -> Canvas:
     stick figure on top), neutral (no person shown).
     """
     c = runner.ctrl
-    cv = Canvas()
-    _video(cv, runner, view)
+    now = _clock()
+    a = _anim(runner)
+    if a.prev_state == "countdown" and c.state == "recording":
+        a.go_since = now
+    cv = Canvas(bg=None)  # _video paints every pixel
+    _video(cv, runner, view, now)
     if c.state in ("setup", "confirm"):
         cv.dim(VX, VY, VW, VH, 0.38)
-    _top_bar(cv, runner)
-    cv.fade(VX, VY + VH - 84, VW, 84, BG, 0.0, 0.88)
+    _top_bar(cv, runner, now)
+    cv.fade(VX, VY + VH - 84, VW, 84, BG, 0.0, 0.9)
     paused = c.state == "idle" and bool(getattr(c, "paused", False))
     if c.state in ("readiness", "ready", "countdown", "recording", "confirm"):
-        cv.ring(VX, VY, VW, VH, 0, 3, STATE_COLOURS[c.state])
+        _window_frame(cv, STATE_COLOURS[c.state])
     elif paused:
-        cv.ring(VX, VY, VW, VH, 0, 2, AMBER, alpha=0.75)
+        _window_frame(cv, AMBER, 0.75)
     if c.state == "setup":
-        _setup_card(cv, c)
+        _setup_card(cv, c, now)
     elif c.state == "readiness":
         _readiness_overlay(cv, runner)
     elif c.state == "confirm":
         _confirm_card(cv, c)
     if getattr(runner, "gesture_flow", False):
         _gesture_ring(cv, runner)
-    if show_score:
-        _score_hud(cv, runner, view)
+
+    if c.state not in ("setup", "readiness", "confirm", "countdown"):
+        bottom = _task_panel(cv, runner, show_score, a, now)
+        top = (bottom + 18) if bottom is not None else VY + 80
+        if show_score:
+            frames = runner.splitter.current() if getattr(runner, "splitter", None) else None
+            if view != "neutral" and (c.state == "recording" or frames):
+                _eval_bar(cv, runner, a, now)
+            if getattr(runner, "gesture_flow", False):
+                _gesture_hud(cv, runner, a, now, top)
+            else:
+                _classic_hud(cv, runner, a, now, top)
+        else:
+            _testing_box(cv, runner, a, now)
+    else:
+        a.task_key = None
+        a.task_content = None
+        if c.state == "confirm" and not show_score:
+            a.saved_task = c.choice_task
     if c.state == "countdown":
-        _countdown_overlay(cv, runner)
+        _countdown_overlay(cv, runner, now)
+    _go_overlay(cv, a, now)
     if c.state not in ("setup", "confirm", "countdown") and not (
         c.state == "recording" and c.message == "Recording. Space stops."
     ):
@@ -1683,6 +2353,8 @@ def render(runner, view: str = "stick", show_score: bool = False) -> Canvas:
     over = hit(btns, *pointer) if pointer else None
     for btn in btns:
         _draw_button(cv, btn, hovered=btn.key is not None and btn.key == over)
+    a.prev_state = c.state
+    a.t_last = now
     return cv
 
 

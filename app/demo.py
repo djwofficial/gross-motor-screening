@@ -210,6 +210,7 @@ class DemoRunner(Runner):
         self._last_live = now
         from app.main import score_try
         from common.format import Try
+        from model.predict import predict_proba
         from model.task_classifier import predict_task
 
         c = self.ctrl
@@ -223,8 +224,14 @@ class DemoRunner(Runner):
                 g_task, g_leg, g_conf = predict_task(tr.points, tr.t)
                 self.detect = {"task": g_task, "leg": g_leg, "confidence": float(g_conf)}
                 task = g_task
-            _clues, score, conf, reasons = score_try(tr, task)
-            self.live = {"score": score, "confidence": conf, "reasons": reasons, "task": task}
+            clues, score, conf, reasons = score_try(tr, task)
+            self.live = {
+                "score": score,
+                "confidence": conf,
+                "reasons": reasons,
+                "task": task,
+                "proba": predict_proba(task, clues),  # the evaluation bar (app.screen)
+            }
         except ValueError as e:  # e.g. no torso found yet
             self.live = {"error": f"no live score yet: {e}"}
 
@@ -336,6 +343,7 @@ class DemoRunner(Runner):
         self._last_live = now
         from app.main import score_try
         from common.format import Try
+        from model.predict import predict_proba
         from model.task_classifier import predict_task
 
         t = np.array([f[0] for f in frames_src], dtype=np.float64)
@@ -363,7 +371,13 @@ class DemoRunner(Runner):
                     "task": 3,
                 }
             else:
-                self.live = {"score": score, "confidence": conf, "reasons": reasons, "task": task}
+                self.live = {
+                    "score": score,
+                    "confidence": conf,
+                    "reasons": reasons,
+                    "task": task,
+                    "proba": predict_proba(task, clues),
+                }
         except ValueError as e:  # e.g. no torso found yet
             self.live = {"error": f"no live score yet: {e}"}
 

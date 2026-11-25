@@ -189,18 +189,20 @@ def test_detecting_chip_only_with_show_score(tmp_path, guess):
     to_idle(r, clock)
     guess["value"] = (3, "L", 0.87)
     r.press("SPACE", clock())
-    assert "Detecting…" in screen.render(r, "camera", show_score=True).texts
+    shown = screen.render(r, "camera", show_score=True).texts
+    assert "TASK ?" in shown and "Detecting…" in shown  # cyber task panel (Marty, 2026-11-26)
     stream = FakePoseStream(task=3, seed=0)
     for _ in range(60):  # 2 s of the try: the guess runs every 0.5 s after the first 1 s
         r.feed(stream.read())
     assert r.ctrl.state == "recording"
     assert r.detect == {"task": 3, "leg": "L", "confidence": 0.87}
     shown = screen.render(r, "camera", show_score=True).texts
-    assert "Detecting: standing long jump · 87%" in shown
+    assert "TASK 3" in shown and "STANDING LONG JUMP" in shown and "Detected · 87%" in shown
     hidden = " ".join(screen.render(r, "camera", show_score=False).texts).lower()
-    assert "detecting" not in hidden
+    assert "detecting" not in hidden and "87%" not in hidden
     r.press("2", clock())
-    assert "Task set by key: hop on one leg" in screen.render(r, "camera", show_score=True).texts
+    shown = screen.render(r, "camera", show_score=True).texts
+    assert "TASK 2" in shown and "HOP ON ONE LEG" in shown and "Set by key" in shown
 
 
 def test_testing_mode_unchanged(tmp_path, guess):
