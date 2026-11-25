@@ -78,6 +78,11 @@ CLUE_NAMES = {
             "land_step",
             "hands_low",
         ),
+        # 2 view-robust clues (Louise, 2026-11-25, docs/task_cards/louise_2026-11-25_t3_camera_robust.md):
+        # in the child's torso size around take-off and landing, not one torso for the whole file,
+        # so the 3 cameras of one try agree more (jump_size camera noise 0.43 -> 0.18).
+        "jump_size_local",
+        "hip_peak_local",
     ],
 }
 
@@ -292,6 +297,7 @@ def _task3_clues(p: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[str, 
 # the pre-jump windows stop before the first air frame). Windows in seconds around the first full
 # jump (air start a0, air end a1); every value in torso lengths, from BODY_25 points only.
 _T3_EXTRA_NAMES = CLUE_NAMES[3][5:]
+_T3_LOCAL_WIN_S = 0.6  # window for the *_local clues (0.35 s left more camera noise)
 _T3_FILL = (
     -9.0
 )  # a clue that can't be measured (no jump, joint missing); same fill as the experiment
@@ -364,6 +370,19 @@ def _task3_extra_raw(p: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[s
         f["crouch"] = (stand_h - _nanmin(h_rel[before_air(a0 - 0.8)])) / stand_h
         f["land_squat"] = (stand_h - _nanmin(h_rel[win(a1, a1 + 1.0)])) / stand_h
     f["hip_peak"] = _nanmax(hip[win(a0, a1), 1]) - _nanmed(hip[pre, 1])
+
+    # View-robust versions (0.6 s windows): the child grows ~30% on screen while jumping toward a
+    # camera, so distances are divided by the torso size at that moment (geometric mean of the
+    # torso before and after), and the size change is a log ratio.
+    pre_l, post_l = before_air(a0 - _T3_LOCAL_WIN_S), win(a1, a1 + _T3_LOCAL_WIN_S)
+    tp, tq = _nanmed(torso[pre_l]), _nanmed(torso[post_l])
+    if np.isfinite(tp) and np.isfinite(tq) and tp > 0 and tq > 0:
+        tm = np.sqrt(tp * tq)
+        dx_l = abs(_nanmed(hip[post_l, 0]) - _nanmed(hip[pre_l, 0])) / tm
+        dy_l = (_nanmed(ank_y[pre_l]) - _nanmed(ank_y[post_l])) / tm
+        grow = np.log(tq / tp)
+        f["jump_size_local"] = float(np.hypot(dx_l, 1.5 * max(0.0, dy_l) + 2.5 * max(0.0, grow)))
+        f["hip_peak_local"] = (_nanmax(hip[win(a0, a1), 1]) - _nanmed(hip[pre_l, 1])) / tp
     w = win(a0 - 0.3, a1 + 0.1)
     f["arm_up"] = _nanmax((np.nanmax(wr_y, axis=1) - neck[:, 1])[w] / torso[w])
     seg = ((np.nanmean(wr_y, axis=1) - hip[:, 1]) / torso)[win(a0 - 1.0, a0 + 0.2)]

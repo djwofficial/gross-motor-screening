@@ -22,6 +22,8 @@ EXTRA = [
     "land_move",
     "land_step",
     "hands_low",
+    "jump_size_local",
+    "hip_peak_local",
 ]
 
 
@@ -30,11 +32,11 @@ def test_names_keep_the_old_five_first():
 
 
 @pytest.mark.parametrize("leg", ["L", "R"])
-def test_fake_try_gives_finite_values_for_all_18_names(leg):
+def test_fake_try_gives_finite_values_for_all_20_names(leg):
     tr = make_fake_try(task=3, leg=leg)
     c = compute(3, tr.points, tr.t)
     assert list(c) == CLUE_NAMES[3]
-    assert len(c) == 18
+    assert len(c) == 20
     assert all(isinstance(v, float) and np.isfinite(v) for v in c.values())
 
 

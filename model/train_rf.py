@@ -255,6 +255,8 @@ def _fake_clues(task: int, level: float, rng: np.random.Generator) -> dict[str, 
             "land_move": float(max(0.0, 0.3 - 0.1 * level + noise(0.08))),
             "land_step": float(max(0.0, 0.2 - 0.08 * level + noise(0.06))),
             "hands_low": float(0.3 + 0.1 * level + noise(0.1)),
+            "jump_size_local": float(max(0.0, 0.9 + 0.35 * level + noise(0.15))),
+            "hip_peak_local": float(max(0.0, 0.25 + 0.07 * level + noise(0.04))),
         }
     clues["duration_s"] = duration
     assert set(clues) == set(CLUE_NAMES[task]), "update _fake_clues when CLUE_NAMES changes"
