@@ -319,21 +319,6 @@ def _lighten(c, f: float = 0.14):
     return tuple(int(v + (255 - v) * f) for v in c)
 
 
-@lru_cache(maxsize=64)
-def _blob_mask(w: int, h: int, feather: int) -> np.ndarray:
-    """Alpha (h, w, 1): 1 in the middle, easing to 0 at every edge (a shadow with no edge)."""
-
-    def ramp(n: int) -> np.ndarray:
-        f = max(1, min(feather, n // 2))
-        r = np.ones(n, np.float32)
-        u = np.linspace(0, 1, f, dtype=np.float32)
-        u = u * u * (3 - 2 * u)
-        r[:f], r[n - f :] = u, u[::-1]
-        return r
-
-    return (ramp(h)[:, None] * ramp(w)[None, :])[..., None]
-
-
 class Canvas:
     """The window picture plus every string drawn on it (tests read .texts)."""
 
@@ -460,13 +445,6 @@ class Canvas:
         import cv2
 
         cv2.circle(self.img, (int(cx * 4), int(cy * 4)), int(r * 4), colour, -1, cv2.LINE_AA, 2)
-
-    def soft(self, x, y, w, h, alpha: float, feather: int = 48, colour=BG):
-        """A dark patch with no edge behind text (so text reads on any camera picture)."""
-        w, h = int(round(w)), int(round(h))
-        if w <= 0 or h <= 0 or alpha <= 0:
-            return
-        self.paint(int(round(x)), int(round(y)), _blob_mask(w, h, feather) * alpha, colour)
 
 
 def _side(i: int):
