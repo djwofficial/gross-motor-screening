@@ -35,6 +35,8 @@ Ideas per clue: Job Card 2 in the team Google Doc.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from common import body25 as b
@@ -53,7 +55,30 @@ CLUE_NAMES = {
         "wrist_speed",
     ],
     2: ["duration_s", "hops", "longest_pause_s", "touchdowns"],
-    3: ["duration_s", "feet_gap_takeoff", "feet_gap_landing", "air_s", "jump_size"],
+    3: [
+        "duration_s",
+        "feet_gap_takeoff",
+        "feet_gap_landing",
+        "air_s",
+        "jump_size",
+        # 13 extra clues "A" (Marty, 2026-11-23, docs/task_cards/marty_2026-11-23_t3_experiments.md):
+        # 5-seed macro-F1 0.522 -> 0.558, kappa 0.464 -> 0.529. Keep the 5 names above in place.
+        *(
+            "n_air",
+            "best_jump_size",
+            "dx",
+            "dy",
+            "scale_gain",
+            "crouch",
+            "hip_peak",
+            "arm_up",
+            "arm_range",
+            "land_squat",
+            "land_move",
+            "land_step",
+            "hands_low",
+        ),
+    ],
 }
 
 UNKNOWN = "unknown"
@@ -261,6 +286,106 @@ def _task3_clues(p: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[str, 
         out["jump_size"] = float(np.hypot(dx, 1.5 * max(0.0, dy) + 2.5 * max(0.0, scale_gain)))
         break
     return out
+
+
+# Task 3 extra clues "A": ported from scripts/experiments/exp_t3_best.py (jump_feats, bug 1 fixed:
+# the pre-jump windows stop before the first air frame). Windows in seconds around the first full
+# jump (air start a0, air end a1); every value in torso lengths, from BODY_25 points only.
+_T3_EXTRA_NAMES = CLUE_NAMES[3][5:]
+_T3_FILL = (
+    -9.0
+)  # a clue that can't be measured (no jump, joint missing); same fill as the experiment
+
+
+def _nan_stat(x: np.ndarray, fn) -> float:
+    x = np.asarray(x, dtype=np.float64)
+    x = x[np.isfinite(x)]
+    return float(fn(x)) if x.size else float("nan")
+
+
+def _nanmed(x: np.ndarray) -> float:
+    return _nan_stat(x, np.median)
+
+
+def _nanmin(x: np.ndarray) -> float:
+    return _nan_stat(x, np.min)
+
+
+def _nanmax(x: np.ndarray) -> float:
+    return _nan_stat(x, np.max)
+
+
+def _task3_extra_raw(p: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[str, float]:
+    nan = float("nan")
+    f = dict.fromkeys(_T3_EXTRA_NAMES, nan)
+    airs = [i for i in range(1, len(events) - 1) if events[i]["state"] == "air"]
+    f["n_air"] = float(sum(e["state"] == "air" for e in events))
+    best = nan
+    for i in airs:
+        s = events[i - 1 : i + 2]
+        if s[0]["state"] in ("before", "after") and s[2]["state"] in ("before", "after"):
+            c = _task3_clues(p, t, [dict(s[0], state="before"), s[1], dict(s[2], state="after")])
+            if c["air_s"] > 0:
+                best = c["jump_size"] if np.isnan(best) else max(best, c["jump_size"])
+    f["best_jump_size"] = best
+    first = next(
+        (
+            i
+            for i in airs
+            if events[i - 1]["state"] in ("before", "after") and events[i + 1]["state"] == "after"
+        ),
+        None,
+    )
+    if first is None:
+        return f
+    hip = _mid_hip_xy(p)
+    neck = p[:, b.NECK, :2]
+    torso = np.linalg.norm(neck - hip, axis=1)
+    ank_y = np.nanmean(p[:, [b.L_ANKLE, b.R_ANKLE], 1], axis=1)
+    knee_y = np.nanmean(p[:, [b.L_KNEE, b.R_KNEE], 1], axis=1)
+    wr_y = p[:, [b.L_WRIST, b.R_WRIST], 1]
+    h_rel = (hip[:, 1] - ank_y) / torso
+    a0, a1 = events[first]["start_s"], events[first]["end_s"]
+
+    # _TIME_EPS: window edges such as a1 + 1.2 s fall exactly on frames (30 fps); keep those frames
+    # in, whatever the clock offset (the experiment used no eps; see the task card for the effect).
+    def win(s0: float, s1: float) -> np.ndarray:
+        return (t >= s0 - _TIME_EPS) & (t <= s1 + _TIME_EPS)
+
+    def before_air(s0: float) -> np.ndarray:  # pre-jump windows stop before the first air frame
+        return (t >= s0 - _TIME_EPS) & (t < a0)  # a0 is a frame time itself
+
+    stand_h = _nanmed(h_rel[win(t[0], max(t[0] + 0.3, a0 - 0.8))])
+    pre, post = before_air(a0 - 0.35), win(a1, a1 + 0.35)
+    f["dx"] = abs(_nanmed(hip[post, 0]) - _nanmed(hip[pre, 0]))
+    f["dy"] = _nanmed(ank_y[pre]) - _nanmed(ank_y[post])
+    f["scale_gain"] = _nanmed(torso[post]) / _nanmed(torso[pre]) - 1.0
+    if np.isfinite(stand_h) and stand_h > 0:
+        f["crouch"] = (stand_h - _nanmin(h_rel[before_air(a0 - 0.8)])) / stand_h
+        f["land_squat"] = (stand_h - _nanmin(h_rel[win(a1, a1 + 1.0)])) / stand_h
+    f["hip_peak"] = _nanmax(hip[win(a0, a1), 1]) - _nanmed(hip[pre, 1])
+    w = win(a0 - 0.3, a1 + 0.1)
+    f["arm_up"] = _nanmax((np.nanmax(wr_y, axis=1) - neck[:, 1])[w] / torso[w])
+    seg = ((np.nanmean(wr_y, axis=1) - hip[:, 1]) / torso)[win(a0 - 1.0, a0 + 0.2)]
+    f["arm_range"] = _nanmax(seg) - _nanmin(seg)
+    late = win(a1 + 0.3, a1 + 1.2)
+    hx = hip[late, 0] / torso[late]
+    f["land_move"] = _nanmax(hx) - _nanmin(hx)
+    ground = {j: _nanmed(p[post, j, 1]) for j in (b.L_ANKLE, b.R_ANKLE)}
+    f["land_step"] = _nanmax(
+        np.array([_nanmax((p[late, j, 1] - g) / torso[late]) for j, g in ground.items()])
+    )
+    w = win(a1, a1 + 1.2)
+    f["hands_low"] = _nanmin((np.nanmin(wr_y, axis=1) - knee_y)[w] / torso[w])
+    return f
+
+
+def _task3_extra_clues(p: np.ndarray, t: np.ndarray, events: list[dict]) -> dict[str, float]:
+    """The 13 extra task 3 clues, every value a finite float (_T3_FILL where unmeasured)."""
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        raw = _task3_extra_raw(p, t, events)
+    return {k: float(v) if np.isfinite(v) else _T3_FILL for k, v in raw.items()}
 
 
 # --- Task 1 (stand on one leg), Louise -------------------------------------------------------
@@ -656,7 +781,9 @@ def timeline_and_compute(
     if task == 3:
         p = _task3_pose(points)
         events = _task3_events(p, t)
-        return events, _task3_clues(p, t, events)
+        out = _task3_clues(p, t, events)
+        out.update(_task3_extra_clues(p, t, events))
+        return events, out
     events = timeline(task, points, t)
     if task == 1:
         return events, _clues_task1(points, t, events)

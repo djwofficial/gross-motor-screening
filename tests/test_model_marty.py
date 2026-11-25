@@ -12,6 +12,7 @@ from common.format import make_fake_try
 from model.baseline import evaluate_baseline, generate_rf_confusion_matrices
 from model.task_classifier import (
     CLUE_COLUMNS,
+    TASK_FEATURES,
     cross_validate_task_classifier,
     extract_task_clues,
     fit_and_save_task_model,
@@ -62,14 +63,14 @@ def test_predict_task_with_saved_model_bundle(tmp_path: Path):
 
 
 def test_extract_task_clues_returns_all_finite_values():
-    from features.clues import CLUE_NAMES
-
+    # The task classifier's features are a fixed list (TASK_FEATURES); it doesn't read every
+    # CLUE_NAMES[task] name (e.g. the 13 extra task 3 clues of 2026-11-25).
     for task in (1, 2, 3):
         tr = make_fake_try(task=task, leg="L")
         clues = extract_task_clues(tr.points, tr.t)
-        for col in (*CLUE_COLUMNS, *CLUE_NAMES[task]):
+        for col in TASK_FEATURES:
             assert col in clues
-            assert np.isfinite(clues[col])
+        assert all(np.isfinite(v) for v in clues.values())
 
 
 def test_task_classifier_group_kfold_and_confusion_matrix(tmp_path: Path):

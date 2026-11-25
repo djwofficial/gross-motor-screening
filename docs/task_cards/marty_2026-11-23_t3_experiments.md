@@ -96,6 +96,50 @@ day (are both feet visible from start line to landing in every task 3 try?).
 4. **Untested next idea:** B only when the current finder finds no jump, so the other files stay
    unchanged.
 
+## 8. Ported into `features/clues.py` (2026-11-25, branch `marty/t3-clues-a`)
+Proposal 3 done: the 13 A clues (4 + A without B) are appended to `CLUE_NAMES[3]` (first 5 names
+unchanged) and computed by `_task3_extra_clues` in `compute(3, ...)`. It uses BODY_25 points
+only, on the normalized pose (torso lengths), and puts -9 where a clue can't be measured, so
+`compute` always returns finite values. `explain(3, ...)` still uses only the old clues.
+`model/task_classifier.py` is unchanged.
+
+**One deliberate difference from `exp_t3_best.py`:** the A windows use `_TIME_EPS` at their edges,
+like the rest of the task 3 code. Edges such as a1 + 1.2 s fall exactly on 30 fps frames, so
+without it, floating-point rounding decided whether that edge frame was in. That broke
+`tests/test_clues_task3_frontal.py::test_exact_20fps_015s_nan_gap_is_clock_offset_invariant`
+(`hands_low` changed with the clock offset). Effect, checked on all 1096 group B task 3 files:
+- without the eps, the port gives exactly the experiment's values on every file (0 differ)
+- with the eps, 370 files have at least one A value that differs (crouch 289, land_squat 285,
+  land_move 66, land_step 24, arm_range 20, arm_up 9, hands_low 9)
+
+**Result** on the rebuilt `runs/clue_table.csv` (`python scripts/make_clue_table.py --tasks 1 2 3`;
+values rounded to 4 decimals). Same CV as `exp_t3_best.py`: `make_forest`, GroupKFold(5) by child,
+seeds 0-4 = 25 runs, 1096 rows, 103 children:
+
+| version | macro-F1 | kappa | Good recall | new better in (F1 / kappa) |
+|---|---|---|---|---|
+| card §5, current 4 clues | 0.522 | 0.464 | 0.28 | – |
+| card §5, 4 + A (no eps) | 0.558 | 0.529 | 0.30 | 14/25 / 21/25 |
+| table, old 4 clues | 0.521 ± 0.028 | 0.466 ± 0.052 | 0.28 | – |
+| **table, 17 clues (pipeline)** | **0.558 ± 0.057** | **0.528 ± 0.079** | **0.30** | **18/25 / 23/25** |
+
+Gain: macro-F1 **+0.037**, kappa +0.062, which clears the +0.02 gate, so the model was saved.
+
+Checks:
+- Task 1 and 2 rows: the metadata columns and every `CLUE_NAMES[1]`/`[2]` column are
+  string-identical to the table built on `origin/main` (1205 and 1055 rows). The first 5 task 3
+  columns are identical too (1096 rows). The only change is 13 new columns.
+- `python -m model.task_classifier`: printed accuracy, macro-F1 and confusion matrix CSV are
+  identical before and after (10 clue columns: accuracy 0.8504, macro-F1 0.8484; all features:
+  accuracy 0.8746, macro-F1 0.8730).
+- `python -m model.train_rf --table runs/clue_table.csv --task 3 --save` (seed 0): child leak
+  check PASS, macro-F1 0.56 ± 0.06, kappa 0.51 ± 0.09 (most common score 0.26 / 0.00). Saved
+  `models/task3_rf.joblib` (0.9 MB, 17 features).
+- `python -m app.main --fake`, `ruff format .`, `ruff check .`, `pytest`: all pass.
+  `tests/contracts` unchanged. New `tests/test_clues_task3_extra.py`: 18 names, finite on
+  `make_fake_try`, -9 with no pose. `tests/test_model_marty.py` now checks the classifier's own
+  `TASK_FEATURES`, not every `CLUE_NAMES[task]` name.
+
 ## Done when
 The numbers above are reproduced by the scripts in `scripts/experiments/` (each prints them;
 `exp_t3_best.py` and `exp_t3_stagger.py` take about 2-3 minutes; `exp_t3_stagger.py` needs
