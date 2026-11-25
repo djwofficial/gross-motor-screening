@@ -12,7 +12,7 @@ macro-F1 and quadratic kappa computed like `model.train_rf` (`_macro_f1`, `_kapp
 Only group B aggregate numbers here, no file-by-file results.
 
 **Files added:** `scripts/experiments/exp_t3_model_swap.py`, `exp_t3_stagger.py`,
-`t3_more_clues.py`, `exp_t3_best.py`, `t3_feet_out.py`, this card.
+`t3_more_clues.py`, `exp_t3_best.py`, `t3_feet_out.py`, `exp_t3_feet.py` (section 9), this card.
 
 ## 1. Model swap (`exp_t3_model_swap.py`)
 Current 4 clues (`feet_gap_takeoff`, `feet_gap_landing`, `air_s`, `jump_size`).
@@ -139,6 +139,36 @@ Checks:
   `tests/contracts` unchanged. New `tests/test_clues_task3_extra.py`: 18 names, finite on
   `make_fake_try`, -9 with no pose. `tests/test_model_marty.py` now checks the classifier's own
   `TASK_FEATURES`, not every `CLUE_NAMES[task]` name.
+
+## 9. Feet-in-picture clues (`exp_t3_feet.py`, 2026-11-25, experiment only)
+Can the forest tell "didn't jump" from "jumped out of the picture"? Feet clues per file from
+`eval.dry_run_count.feet_in_picture` (1920x1080, point score > 0.3): `ankle_missing`,
+`lost_at_bottom`, `reached_edge`. Same 1096 rows; no jump found (`n_air == 0`): 94 = 50 Bad +
+44 Good/Perfect. Rule: a variant counts only if mean F1 gain >= +0.02 and F1 wins >= 18/25.
+
+| variant | macro-F1 | kappa | Good recall | F1 / kappa wins vs V0 | counts |
+|---|---|---|---|---|---|
+| V0 = current 17 features | 0.557 | 0.527 | 0.30 | – | – |
+| V1 = V0 + ankle_missing | 0.553 | 0.540 | 0.31 | 11/25 / 19/25 | no |
+| V2 = V1 + lost_at_bottom + reached_edge | 0.552 | 0.531 | 0.31 | 13/25 / 13/25 | no |
+
+On the 94 no-jump files (seed 0, out of fold) V0 calls all 94 Bad; V1 moves 14 of 44
+Good/Perfect to Good but also 7 of 50 Bad to Good, never Perfect. Median `ankle_missing`, no jump:
+Bad 0.00, Good 0.48, Perfect 0.43 (jump found: 0.03-0.04 for every label).
+
+As a flag outside the model (no-jump files only, flagged = `ankle_missing` > cutoff; cutoffs are
+guesses to compare, none chosen):
+
+| cutoff | Bad flagged | Good+Perfect flagged |
+|---|---|---|
+| 0.05 | 20/50 | 38/44 |
+| 0.10 | 19/50 | 34/44 |
+| 0.20 | 13/50 | 31/44 |
+| 0.30 | 12/50 | 27/44 |
+
+**Result:** no feet clue goes into the forest (no F1 gain). As a "check by teacher" flag when no
+jump is found, `ankle_missing` > 0.20 catches 31/44 Good/Perfect at the cost of 13/50 Bad: a
+team decision (Daryn), nothing ported. `features/`, `models/`, `app/` unchanged.
 
 ## Done when
 The numbers above are reproduced by the scripts in `scripts/experiments/` (each prints them;
