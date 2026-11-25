@@ -145,8 +145,32 @@ class Controller:
     def _setup_key(self, k: str) -> list[tuple]:
         if k == "ESC":
             return [("quit",)]
+        if k in ("FIELD_0", "FIELD_1", "FIELD_2"):
+            target = int(k[-1])
+            if target <= self.field or all(
+                self._field_error(i) is None for i in range(self.field, target)
+            ):
+                self.field = target
+                self.message = f"Type the {FIELDS[self.field]}, then Enter."
+            else:
+                for i in range(self.field, target):
+                    err = self._field_error(i)
+                    if err:
+                        self.field = i
+                        self.message = err
+                        break
+            return []
+        if k in ("UP", "SHIFT_TAB"):
+            if self.field > 0:
+                self.field -= 1
+                self.message = f"Type the {FIELDS[self.field]}, then Enter."
+            return []
         if k == "BACKSPACE":
-            self.form[self.field] = self.form[self.field][:-1]
+            if self.form[self.field]:
+                self.form[self.field] = self.form[self.field][:-1]
+            elif self.field > 0:
+                self.field -= 1
+                self.message = f"Type the {FIELDS[self.field]}, then Enter."
             return []
         if k in ("TAB", "ENTER"):
             err = self._field_error(self.field)
@@ -201,11 +225,12 @@ class Controller:
     def _readiness_key(self, k: str) -> list[tuple]:
         if k == "ENTER":
             self.state = "idle"
-            self.message = (
-                "Started although the readiness check listed problems."
-                if self.problems
-                else "Ready. Waiting for the child at the start line."
-            )
+            if self.problems:
+                self.message = "Started although the readiness check listed problems."
+            elif self.mode == "manual":
+                self.message = "Ready. Press Space to start a try."
+            else:
+                self.message = "Ready. Stand at the start line to start automatically."
             return [("ready_ok",)]
         return []
 
@@ -303,18 +328,33 @@ class Runner:
     press(key) per key.
     """
 
-    def __init__(self, out_dir, mode="auto", frame_size=(1280, 720), source="fake", clock=None):
+    def __init__(
+        self,
+        out_dir,
+        mode="auto",
+        frame_size=(1280, 720),
+        source="fake",
+        clock=None,
+        start_area=None,
+    ):
         from app.main import PRE_ROLL_S
         from live.segment import Segmenter
 
         self.out_dir = Path(out_dir)
         self.ctrl = Controller(mode)
-        self.seg = Segmenter()
+        self.frame_size = frame_size
+        self.source = source
+        if start_area is None and source != "fake":
+            from live.start_area import load as load_start_area
+
+            start_area = load_start_area(
+                self.out_dir / "start_area.json", frame_size=frame_size
+            ) or load_start_area(frame_size=frame_size)
+        self.start_area = start_area
+        self.seg = Segmenter(start_area=self.start_area)
         from live.track import ChildTracker
 
         self.tracker = ChildTracker(frame_size)  # keeps the lock on the child between frames (#33)
-        self.frame_size = frame_size
-        self.source = source
         self.pre_roll_s = PRE_ROLL_S
         self.clock = clock or time.monotonic
         self.session: Session | None = None
@@ -338,7 +378,7 @@ class Runner:
 
     def feed(self, item) -> None:
         from live.convert import halpe_to_body25
-        from live.quality import check
+        from live.quality import MAX_BODY_FRAC, check
 
         t, kp26, sc26, frame = item
         if self.hist and t <= self.hist[-1][0]:  # the clock went back (a new clip): start over
@@ -370,7 +410,13 @@ class Runner:
         c = self.ctrl
         if c.state == "readiness":
             pts = np.stack([p for _, p in self.hist])
-            c.problems = check(pts if found else None, self.fps(), self.frame_size)
+            c.problems = check(
+                pts if found else None,
+                self.fps(),
+                self.frame_size,
+                start_area=self.start_area,
+                max_body_frac=MAX_BODY_FRAC,
+            )
         if self.buf is not None:
             self.buf.append((t, child25, raw))
             self._offer_video(frame)

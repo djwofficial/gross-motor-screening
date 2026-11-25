@@ -48,6 +48,7 @@ MIN_SCORE = 0.3  # a point with a lower score counts as not found
 MIN_SEEN = 0.8  # a body part must be found in at least 80% of the frames
 MIN_MEAN_SCORE = 0.5  # guess: team clips in normal light average 0.87-0.92
 MIN_BODY_FRAC = 0.25  # guess: body (head to feet) shorter than this part of the picture = too far
+MAX_BODY_FRAC = 0.65
 EDGE = 0.02  # a point closer than 2% of the picture size to an edge counts as cut off
 MAX_EDGE_FRAC = 0.05  # more than 5% of the found points at an edge = body cut off
 ROOM_T3 = 1.5  # torso lengths of picture below the feet for the long jump (group B, see above)
@@ -98,6 +99,24 @@ def landing_room(points, frame_size=(1280, 720), min_score: float = MIN_SCORE) -
     return float(np.median((h - low[use]) / torso[use]))
 
 
+def feet_visible(points, frame_size=(1280, 720), min_score: float = MIN_SCORE) -> bool:
+    """True when both ankles are detected and safely inside the picture edges."""
+    if points is None or len(points) == 0:
+        return False
+    p = np.asarray(points, dtype=np.float32)
+    frame = p[-1] if p.ndim == 3 else p
+    if frame.shape[0] <= max(b.L_ANKLE, b.R_ANKLE):
+        return False
+    w, h = float(frame_size[0]), float(frame_size[1])
+    for idx in (b.L_ANKLE, b.R_ANKLE):
+        x, y, s = float(frame[idx, 0]), float(frame[idx, 1]), float(frame[idx, 2])
+        if s <= min_score:
+            return False
+        if x < EDGE * w or x > (1 - EDGE) * w or y < EDGE * h or y > (1 - EDGE) * h:
+            return False
+    return True
+
+
 def check(
     points,
     fps: float,
@@ -105,6 +124,7 @@ def check(
     start_area=None,
     min_score: float = MIN_SCORE,
     task: int | None = None,
+    max_body_frac: float | None = None,
 ) -> list[str]:
     problems: list[str] = []
     if 0 < fps < MIN_FPS:
@@ -158,6 +178,11 @@ def check(
             problems.append(
                 f"The child looks small in the picture (body is {frac:.0%} of the picture "
                 f"height, at least {MIN_BODY_FRAC:.0%} is needed). Move the laptop closer."
+            )
+        elif max_body_frac is not None and frac > max_body_frac:
+            problems.append(
+                f"Too close for a forward jump (body is {frac:.0%} of the picture height; "
+                "aim for about 50%). Step back a little."
             )
 
     if dark:

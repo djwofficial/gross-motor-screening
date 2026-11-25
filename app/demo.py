@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import deque
 from datetime import date
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from app.ui import Runner
 
 LIVE_EVERY_S = 0.5  # re-score the try so far this often
 LIVE_MIN_S = 1.0  # need at least this much of the try before a live score
+PREVIEW_WINDOW_S = 3.5
 
 
 class DemoRunner(Runner):
@@ -38,20 +40,34 @@ class DemoRunner(Runner):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.live: dict | None = None  # {"score", "confidence", "reasons", "task"}
-        self.result: dict | None = None  # last saved try, read back from its JSON
+        self.preview: deque = deque()
+        self.live: dict | None = None
+        self.result: dict | None = None
         self._last_live = -1e9
 
     def feed(self, item) -> None:
-        super().feed(item)
-        c = self.ctrl
         now = item[0]
+        if self.preview and now <= self.preview[-1][0]:
+            self.preview.clear()
+            self._last_live = -1e9
+        super().feed(item)
+        pts25 = (
+            self.last_points
+            if self.last_points is not None
+            else np.zeros((25, 3), dtype=np.float32)
+        )
+        self.preview.append((now, pts25))
+        while self.preview and now - self.preview[0][0] > PREVIEW_WINDOW_S:
+            self.preview.popleft()
+
+        c = self.ctrl
         if now - self._last_live < LIVE_EVERY_S:
             return
-        if c.state == "recording" and self.buf is not None and len(self.buf) >= 2:
+        recording = c.state == "recording" and self.buf is not None and len(self.buf) >= 2
+        if recording:
             frames_src = [(b[0], b[1]) for b in self.buf]
-        elif len(self.hist) >= 2:
-            frames_src = list(self.hist)
+        elif len(self.preview) >= 2:
+            frames_src = list(self.preview)
         else:
             return
         if frames_src[-1][0] - frames_src[0][0] < LIVE_MIN_S:
@@ -68,10 +84,25 @@ class DemoRunner(Runner):
             task = c.preset_task or c.choice_task
             if task is None:
                 task, _leg, _tconf = predict_task(tr.points, tr.t)
-            _clues, score, conf, reasons = score_try(tr, task)
-            self.live = {"score": score, "confidence": conf, "reasons": reasons, "task": task}
+            clues, score, conf, reasons = score_try(tr, task)
+            if not recording and task == 3 and clues.get("air_s", 0.0) <= 0.0:
+                self.live = {
+                    "hint": "Press Space to start",
+                    "detail": (
+                        "Stand at ~50% height (both feet visible), press Space, "
+                        "then jump forward once."
+                    ),
+                    "task": 3,
+                }
+            else:
+                self.live = {"score": score, "confidence": conf, "reasons": reasons, "task": task}
         except ValueError as e:  # e.g. no torso found yet
             self.live = {"error": f"no live score yet: {e}"}
+
+    def _do_child(self, code, age, consent):
+        super()._do_child(code, age, consent)
+        self.preview.clear()
+        self.live, self.result, self._last_live = None, None, -1e9
 
     def _do_start(self, how):
         super()._do_start(how)
@@ -87,6 +118,7 @@ class DemoRunner(Runner):
             except (OSError, ValueError):
                 return
             self.result = {
+                "try": int(d.get("try") or len(self.saved)),
                 "task": task,
                 "leg": leg,
                 "score": d.get("score"),

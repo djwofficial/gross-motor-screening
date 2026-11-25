@@ -23,6 +23,7 @@ import math
 import os
 import sys
 import time
+import weakref
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -384,10 +385,11 @@ class Button:
     key: str | None
     label: str
     cap: str = ""
-    kind: str = "ghost"  # primary, ghost, seg, label
+    kind: str = "ghost"  # primary, ghost, danger, seg, label, gap
     colour: tuple = ACCENT
     selected: bool = False
     dot: tuple | None = None
+    group: str = ""  # segments sharing a group name render inside one pill track
     x: int = 0
     y: int = 0
     w: int = 0
@@ -402,25 +404,28 @@ class Button:
         )
 
 
-_LABEL = (15, "semibold")
-_CAP = (12, "medium")
+_LABEL = (14, "semibold")
+_CAP = (11, "medium")
 _GROUP_GAP = 24  # least space between the left and the right group of the bar
+_SEG_H = 38
+_SEG_PAD = 4
 
 
 def _cap_gap(pad: int) -> int:
-    """Space before and after the key cap: 10 px at the full 16 px pad."""
-    return round(pad * 10 / 16)
+    """Space before and after the key cap: 9 px at the full 16 px pad."""
+    return round(pad * 9 / 16)
 
 
 def _width(btn: Button) -> int:
     if btn.kind == "label":
-        return math.ceil(measure(btn.label, 14, "medium"))
-    p = btn.pad
+        return math.ceil(measure(btn.label, 12, "semibold"))
+    p = btn.pad if btn.kind != "seg" else max(10, btn.pad - 3)
     w = p + measure(btn.label, *_LABEL) + p
     if btn.dot:
-        w += 14
+        w += 13
     if btn.cap:  # label, gap, key cap, gap (see _draw_button)
-        w += _cap_gap(p) + measure(btn.cap, *_CAP) + 14 + _cap_gap(p) - p
+        cap_w = max(20.0, measure(btn.cap, *_CAP) + 12)
+        w += _cap_gap(p) + cap_w + _cap_gap(p) - p
     return math.ceil(w)
 
 
@@ -428,19 +433,30 @@ def _place(left: list[Button], right: list[Button], pad: int) -> bool:
     """Lay out the left group from the left edge and the right group from the right edge.
     True if both fit with at least _GROUP_GAP between them."""
     x = VX
-    for btn in left:
+    seg_y = BAR_Y + (BAR_H - _SEG_H) // 2
+    for i, btn in enumerate(left):
         if btn.kind == "gap":
-            x += 14
+            x += 18
             continue
-        btn.pad = pad
-        btn.x, btn.y, btn.w, btn.h = x, BAR_Y, _width(btn), BAR_H
-        x += btn.w + (10 if btn.kind == "label" else 6)
+        btn.pad = pad if btn.kind != "seg" else max(10, pad - 3)
+        if btn.kind == "seg":
+            prev_same = i > 0 and left[i - 1].group == btn.group
+            if not prev_same:
+                x += _SEG_PAD
+            btn.x, btn.y, btn.w, btn.h = x, seg_y, _width(btn), _SEG_H
+            next_same = i + 1 < len(left) and left[i + 1].group == btn.group
+            x += btn.w + (3 if next_same else _SEG_PAD)
+        else:
+            btn.x, btn.y, btn.w, btn.h = x, BAR_Y, _width(btn), BAR_H
+            x += btn.w + (10 if btn.kind == "label" else 8)
     x = VX + VW
-    for btn in reversed(right):
+    for i, btn in enumerate(reversed(right)):
         btn.pad = pad
         btn.w, btn.y, btn.h = _width(btn), BAR_Y, BAR_H
         btn.x = x - btn.w
-        x = btn.x - 10
+        next_idx = len(right) - 2 - i
+        extra = 14 if btn.kind == "primary" and next_idx >= 0 else 8
+        x = btn.x - extra
     shown = [b for b in left if b.kind != "gap"]
     left_end = max((b.x + b.w for b in shown), default=VX)
     right_start = min((b.x for b in right), default=VX + VW)
@@ -457,45 +473,57 @@ def buttons(runner) -> list[Button]:
     if st == "setup":
         left.append(Button(None, "Type with the keyboard", kind="label"))
         nxt = "Continue" if c.field == 2 else "Next"
-        right += [Button("ESC", "Quit", "Esc"), Button("ENTER", nxt, "Enter", "primary")]
+        right += [
+            Button("ESC", "Quit", "Esc", "danger"),
+            Button("ENTER", nxt, "Enter", "primary"),
+        ]
     elif st == "readiness":
         right += [
             Button("N", "Next child", "N"),
-            Button("Q", "Quit", "Q"),
+            Button("Q", "Quit", "Q", "danger"),
             Button("ENTER", "Start", "Enter", "primary", GREEN),
         ]
     else:
         task = c.choice_task if st == "confirm" else c.preset_task
         leg = c.choice_leg if st == "confirm" else c.preset_leg
-        left.append(Button(None, "Task" if task else "Task · auto", kind="label"))
+        left.append(Button(None, "TASK" if task else "TASK · AUTO", kind="label"))
         for k in (1, 2, 3):
-            left.append(Button(str(k), TASK_SHORT[k], str(k), "seg", selected=task == k))
+            left.append(
+                Button(str(k), TASK_SHORT[k], str(k), "seg", selected=task == k, group="task")
+            )
         left.append(Button(None, "", kind="gap"))
         if task == 3:  # standing long jump: both feet, no support leg to choose
-            left.append(Button(None, "Both feet", kind="label"))
+            left.append(Button(None, "BOTH FEET", kind="label"))
         else:
-            left.append(Button(None, "Leg" if leg else "Leg · auto", kind="label"))
+            left.append(Button(None, "LEG" if leg else "LEG · AUTO", kind="label"))
             for k, name in (("L", "Left"), ("R", "Right")):
-                left.append(Button(k, name, k, "seg", selected=leg == k))
+                left.append(Button(k, name, k, "seg", selected=leg == k, group="leg"))
         if st in ("idle", "ready"):
             if c.consent == 3:
                 on = bool(c.video)
                 right.append(
-                    Button("V", "Video on" if on else "Video off", "V", dot=RED if on else FAINT)
+                    Button(
+                        "V",
+                        "Video on" if on else "Video off",
+                        "V",
+                        selected=on,
+                        colour=RED,
+                        dot=RED if on else FAINT,
+                    )
                 )
             right += [
                 Button("N", "Next child", "N"),
-                Button("Q", "Quit", "Q"),
+                Button("Q", "Quit", "Q", "danger"),
                 Button("SPACE", "Start", "Space", "primary", GREEN),
             ]
         elif st == "recording":
             right += [
-                Button("BACKSPACE", "Cancel", "Backspace"),
+                Button("BACKSPACE", "Cancel", "Backspace", "danger"),
                 Button("SPACE", "Stop", "Space", "primary", RED),
             ]
         elif st == "confirm":
             right += [
-                Button("BACKSPACE", "Cancel", "Backspace"),
+                Button("BACKSPACE", "Cancel", "Backspace", "danger"),
                 Button("ENTER", "Save", "Enter", "primary"),
             ]
     # Wider system fonts (DejaVu Sans on Linux) need tighter buttons to fit the same bar.
@@ -513,39 +541,219 @@ def hit(btns: list[Button], x, y) -> str | None:
     return None
 
 
+def _draw_bottom_bar_chrome(cv: Canvas, btns: list[Button]) -> None:
+    """Draw segmented control tracks and the vertical separator before the primary action."""
+    groups: dict[str, list[Button]] = {}
+    for btn in btns:
+        if btn.group:
+            groups.setdefault(btn.group, []).append(btn)
+    for items in groups.values():
+        x0 = min(b.x for b in items) - _SEG_PAD
+        x1 = max(b.x + b.w for b in items) + _SEG_PAD
+        cv.rrect(x0, BAR_Y, x1 - x0, BAR_H, 12, fill=SURFACE, border=LINE, border_alpha=0.9)
+
+    primary = next((b for b in btns if b.kind == "primary"), None)
+    if primary is not None:
+        left_neighbors = [b for b in btns if b.key is not None and b.x + b.w < primary.x]
+        if left_neighbors:
+            prev_end = max(b.x + b.w for b in left_neighbors)
+            if primary.x - prev_end <= 24:
+                sx = (prev_end + primary.x) // 2
+                cv.rrect(sx, BAR_Y + 11, 1, BAR_H - 22, 1, fill=LINE, alpha=0.85)
+
+
 def _draw_button(cv: Canvas, btn: Button, hovered: bool) -> None:
     cy = btn.y + btn.h / 2
     if btn.kind == "label":
-        cv.text(btn.x, cy, btn.label, 14, "medium", DIM, "lm")
+        cv.text(btn.x, cy, btn.label, 12, "semibold", FAINT, "lm")
         return
-    filled = btn.kind == "primary" or btn.selected
-    fill = btn.colour if btn.kind == "primary" else (ACCENT if btn.selected else RAISED)
-    if hovered:
-        fill = _lighten(fill)
-    cv.rrect(btn.x, btn.y, btn.w, btn.h, 10, fill=fill, border=None if filled else LINE)
+
+    is_primary = btn.kind == "primary"
+    is_seg = btn.kind == "seg"
+    is_danger = btn.kind == "danger"
+    r = 9 if is_seg else 11
+
+    if is_primary:
+        fill = _lighten(btn.colour, 0.14) if hovered else btn.colour
+        cv.rrect(btn.x, btn.y + 2, btn.w, btn.h, r, fill=SHADOW, alpha=0.6)
+        cv.rrect(
+            btn.x,
+            btn.y,
+            btn.w,
+            btn.h,
+            r,
+            fill=fill,
+            border=_lighten(btn.colour, 0.28),
+            border_alpha=0.72,
+        )
+        cv.rrect(btn.x + 10, btn.y + 1, btn.w - 20, 1, 1, fill=TEXT, alpha=0.28)
+        fg = TEXT
+    elif is_seg:
+        if btn.selected:
+            fill = _lighten(ACCENT, 0.12) if hovered else ACCENT
+            cv.rrect(
+                btn.x,
+                btn.y,
+                btn.w,
+                btn.h,
+                r,
+                fill=fill,
+                border=_lighten(ACCENT, 0.28),
+                border_alpha=0.7,
+            )
+            cv.rrect(btn.x + 8, btn.y + 1, btn.w - 16, 1, 1, fill=TEXT, alpha=0.24)
+            fg = TEXT
+        else:
+            if hovered:
+                cv.rrect(btn.x, btn.y, btn.w, btn.h, r, fill=RAISED, alpha=0.95)
+            fg = TEXT if hovered else DIM
+    elif is_danger:
+        fill = _bgr("#2b181b") if hovered else SURFACE
+        border = _bgr("#f85149") if hovered else LINE
+        cv.rrect(
+            btn.x,
+            btn.y,
+            btn.w,
+            btn.h,
+            r,
+            fill=fill,
+            border=border,
+            border_alpha=0.85 if hovered else 0.75,
+        )
+        fg = _bgr("#ff7b72") if hovered else DIM
+    else:
+        if btn.selected:
+            fill = _bgr("#2b181b") if hovered else _bgr("#221518")
+            border = _bgr("#f85149")
+            cv.rrect(btn.x, btn.y, btn.w, btn.h, r, fill=fill, border=border, border_alpha=0.75)
+            fg = TEXT
+        else:
+            fill = RAISED if hovered else SURFACE
+            border = _lighten(LINE, 0.18) if hovered else LINE
+            cv.rrect(
+                btn.x,
+                btn.y,
+                btn.w,
+                btn.h,
+                r,
+                fill=fill,
+                border=border,
+                border_alpha=0.9 if hovered else 0.75,
+            )
+            fg = TEXT if hovered else _bgr("#c9d1d9")
+
     x = btn.x + btn.pad
     if btn.dot:
         cv.dot(x + 4, cy, 4, btn.dot)
-        x += 14
-    cv.text(x, cy, btn.label, *_LABEL, colour=TEXT, anchor="lm")
+        x += 13
+    cv.text(x, cy, btn.label, *_LABEL, colour=fg, anchor="lm")
+
     if btn.cap:
-        kw = measure(btn.cap, *_CAP) + 14
+        kw = max(20.0, measure(btn.cap, *_CAP) + 12)
         kx = btn.x + btn.w - _cap_gap(btn.pad) - kw
-        cv.rrect(kx, cy - 11, kw, 22, 6, fill=(0, 0, 0), alpha=0.22, border=TEXT, border_alpha=0.22)
-        cv.text(kx + kw / 2, cy, btn.cap, *_CAP, colour=TEXT, anchor="cm", alpha=0.85)
+        kh = 20 if is_seg else 22
+        if is_primary or (is_seg and btn.selected):
+            cv.rrect(
+                kx,
+                cy - kh / 2,
+                kw,
+                kh,
+                6,
+                fill=(0, 0, 0),
+                alpha=0.22,
+                border=TEXT,
+                border_alpha=0.22,
+            )
+            cv.text(kx + kw / 2, cy, btn.cap, *_CAP, colour=TEXT, anchor="cm", alpha=0.92)
+        else:
+            cv.rrect(
+                kx,
+                cy - kh / 2,
+                kw,
+                kh,
+                6,
+                fill=BG if not is_seg else RAISED,
+                alpha=0.85,
+                border=LINE,
+                border_alpha=0.85,
+            )
+            cv.text(kx + kw / 2, cy, btn.cap, *_CAP, colour=DIM if hovered else FAINT, anchor="cm")
 
 
 # ---------------------------------------------------------------------- parts of the picture
+
+
+def _stage_transform(frame_size: tuple[float, float]) -> tuple[float, int, int, int, int]:
+    """Return (scale, draw_w, draw_h, offset_x, offset_y) inside the video stage."""
+    fw, fh = frame_size
+    s = min(VW / fw, VH / fh)
+    dw, dh = int(round(fw * s)), int(round(fh * s))
+    return s, dw, dh, (VW - dw) // 2, (VH - dh) // 2
+
+
+def _draw_framing_guide(cv: Canvas, area: np.ndarray, runner, s: float, ox: int, oy: int) -> None:
+    """Draw the mirrored start-area box and ~50% standing height line."""
+    import cv2
+
+    from live.start_area import default_start_area, mirror_box_x, standing_guide_lines
+
+    fw, fh = runner.frame_size
+    custom = getattr(runner, "start_area", None) is not None
+    raw_box = runner.start_area if custom else default_start_area((fw, fh))
+    mx0, my0, mx1, my1 = mirror_box_x(raw_box, fw)
+    x0, y0 = max(0, int(round(ox + mx0 * s))), max(0, int(round(oy + my0 * s)))
+    x1, y1 = min(VW - 1, int(round(ox + mx1 * s))), min(VH - 1, int(round(oy + my1 * s)))
+    if x1 <= x0 or y1 <= y0:
+        return
+
+    box_col = _bgr("#3fb950") if custom else _bgr("#58a6ff")
+    fg_col = _bgr("#3fb950") if custom else _bgr("#79c0ff")
+    cv.rrect(
+        VX + x0,
+        VY + y0,
+        x1 - x0,
+        y1 - y0,
+        8,
+        fill=box_col,
+        alpha=0.10 if custom else 0.06,
+        border=box_col,
+        border_alpha=0.88,
+        bw=2 if custom else 1,
+    )
+    start_label = "Start area" if custom else "Start area (guide)"
+    sw = measure(start_label, 12, "semibold") + 20
+    cv.rrect(
+        VX + x0 + 8,
+        VY + y0 + 8,
+        sw,
+        24,
+        12,
+        fill=SURFACE,
+        alpha=0.84,
+        border=box_col,
+        border_alpha=0.72,
+    )
+    cv.text(VX + x0 + 18, VY + y0 + 20, start_label, 12, "semibold", fg_col, "lm")
+
+    y_head, _ = standing_guide_lines((fw, fh), raw_box)
+    yh = int(round(oy + y_head * s))
+    if 0 <= yh < VH:
+        for sx in range(x0, x1, 18):
+            cv2.line(area, (sx, yh), (min(sx + 10, x1), yh), box_col, 1, cv2.LINE_AA)
+        target_label = "Target ~50% height"
+        tw = measure(target_label, 12, "medium") + 20
+        tx = VX + 0.5 * (x0 + x1) - tw / 2
+        ty = max(VY + 78, VY + yh - 28)
+        cv.rrect(tx, ty, tw, 22, 11, fill=SURFACE, alpha=0.84, border=box_col, border_alpha=0.68)
+        cv.text(VX + 0.5 * (x0 + x1), ty + 11, target_label, 12, "medium", TEXT, "cm")
 
 
 def _video(cv: Canvas, runner, view: str) -> None:
     import cv2
 
     area = cv.img[VY : VY + VH, VX : VX + VW]
-    fw, fh = runner.frame_size
-    s = min(VW / fw, VH / fh)
-    dw, dh = int(round(fw * s)), int(round(fh * s))
-    ox, oy = (VW - dw) // 2, (VH - dh) // 2
+    fw, _fh = runner.frame_size
+    s, dw, dh, ox, oy = _stage_transform(runner.frame_size)
     if view == "neutral":
         area[:] = NEUTRAL
         return
@@ -556,6 +764,8 @@ def _video(cv: Canvas, runner, view: str) -> None:
         )
     else:
         area[:] = _backdrop()
+    if runner.ctrl.state in ("readiness", "idle", "ready"):
+        _draw_framing_guide(cv, area, runner, s, ox, oy)
     if runner.last_points is not None:
         pts = runner.last_points.copy()
         pts[:, 0] = np.where(pts[:, 2] > 0, fw - pts[:, 0], 0)  # mirror for display only
@@ -595,20 +805,31 @@ def _top_bar(cv: Canvas, runner) -> None:
     if c.state == "recording":
         name = f"{name}  {_recording_seconds(runner):4.1f} s"
     pulse = c.state != "recording" or (time.monotonic() % 1.0) < 0.6
-    x = _chip(cv, VX + VW - 20, cy, name, TEXT, colour, 0.28, colour if pulse else FAINT)
+    dot_col = colour if pulse else (TEXT if c.state == "recording" else FAINT)
+    x = _chip(cv, VX + VW - 20, cy, name, TEXT, colour, 0.28, dot_col)
 
     chips = []
+    if c.state != "setup":
+        from live.quality import feet_visible
+
+        feet_ok = feet_visible(getattr(runner, "last_points", None), runner.frame_size)
+        if feet_ok:
+            chips.append(("Both feet visible", _bgr("#3fb950"), _bgr("#3fb950")))
+        else:
+            chips.append(("Feet not visible", _bgr("#f85149"), RED))
     if c.child:
         chips.append((f"{c.child} · {c.age} months · consent {c.consent}", TEXT, None))
-        chips.append((f"{c.tries_saved} saved", DIM, None))
+        if c.state != "recording":
+            chips.append((f"{c.tries_saved} saved", DIM, None))
         if not age_in_range(c.age):
             lo, hi = AGE_RANGE_MONTHS
             chips.append((f"Outside {lo}–{hi} months", _bgr("#e3b341"), AMBER))
         if c.video:
             chips.append(("Video on", TEXT, RED))
-    fps = runner.fps() if hasattr(runner, "fps") else 0.0
-    mode = "Auto" if c.mode == "auto" else "Manual"
-    chips.append((f"{mode} · {fps:.0f} fps" if fps else mode, DIM, None))
+    if c.state != "recording":
+        fps = runner.fps() if hasattr(runner, "fps") else 0.0
+        mode = "Auto" if c.mode == "auto" else "Manual"
+        chips.append((f"{mode} · {fps:.0f} fps" if fps else mode, DIM, None))
     for label, fg, dot in chips:
         w = 14 + (14 if dot else 0) + measure(label, 13, "medium") + 14
         if x - 8 - w < limit:
@@ -620,51 +841,81 @@ def _card(cv: Canvas, x, y, w, h, alpha=0.9):
     cv.rrect(x, y, w, h, 14, fill=SURFACE, alpha=alpha, border=LINE)
 
 
-def _setup_card(cv: Canvas, c) -> None:
+def _setup_field_boxes(c) -> tuple[int, int, int, int, list[tuple[int, int, int, int]], list[str]]:
     w = 500
-    names = ("Child code", "Age in months", "Consent level")
-    lo, hi = AGE_RANGE_MONTHS
-    hints = ("e.g. K03", f"{lo}–{hi}", "1, 2 or 3 from the signed form")
     msg_lines = wrap(c.message, 14, "regular", w - 56, 2)
     h = 28 + 34 + 26 + 18 + 3 * 82 + len(msg_lines) * 20 + 24
     x, y = VX + (VW - w) // 2, VY + (VH - h) // 2 + 20
+    cx = x + 28
+    yy = y + 28 + 38 + 36
+    bw = w - 56
+    boxes: list[tuple[int, int, int, int]] = []
+    for _ in range(3):
+        yy += 22
+        boxes.append((cx, yy, bw, 46))
+        yy += 46 + 14
+    return x, y, w, h, boxes, msg_lines
+
+
+def _setup_field_hit(c, mx: int, my: int) -> str | None:
+    if c.state != "setup":
+        return None
+    _, _, _, _, boxes, _ = _setup_field_boxes(c)
+    for i, (bx, by, bw, bh) in enumerate(boxes):
+        if bx <= mx <= bx + bw and by <= my <= by + bh:
+            return f"FIELD_{i}"
+    return None
+
+
+def _setup_card(cv: Canvas, c) -> None:
+    names = ("Child code", "Age in months", "Consent level")
+    lo, hi = AGE_RANGE_MONTHS
+    hints = ("e.g. K03", f"{lo}–{hi}", "1 points only · 2 stick figure · 3 + video")
+    x, y, w, h, boxes, msg_lines = _setup_field_boxes(c)
     _card(cv, x, y, w, h, 0.96)
     cx = x + 28
     yy = y + 28
     cv.text(cx, yy, "New child", 26, "semibold", TEXT)
     yy += 38
-    cv.text(cx, yy, "Enter moves to the next field.", 14, "regular", DIM)
+    cv.text(
+        cx,
+        yy,
+        "Enter moves to the next field · Backspace or click a box to go back.",
+        14,
+        "regular",
+        DIM,
+    )
     yy += 36
     caret_on = (time.monotonic() % 1.0) < 0.6
     for i, name in enumerate(names):
         focused = i == c.field
         cv.text(cx, yy, name, 13, "medium", TEXT if focused else DIM)
         if i == 2:
-            cv.text(x + w - 28, yy, "3 allows video", 13, "regular", FAINT, "rt")
-        yy += 22
-        bw = w - 56
+            cv.text(x + w - 28, yy, "1 points · 2 stick · 3 video", 13, "regular", FAINT, "rt")
+        bx, by, bw, bh = boxes[i]
+        yy = by
         cv.rrect(
-            cx,
-            yy,
+            bx,
+            by,
             bw,
-            46,
+            bh,
             10,
             fill=RAISED,
             border=ACCENT if focused else LINE,
             bw=2 if focused else 1,
         )
         value = c.form[i]
-        tx = cx + 14
+        tx = bx + 14
         if value:
-            tx += cv.text(tx, yy + 23, value, 19, "regular", TEXT, "lm")
+            tx += cv.text(tx, by + 23, value, 19, "regular", TEXT, "lm")
         elif not focused:
-            cv.text(tx, yy + 23, hints[i], 16, "regular", FAINT, "lm")
+            cv.text(tx, by + 23, hints[i], 16, "regular", FAINT, "lm")
         if focused:
             if caret_on:
-                cv.rrect(tx + 2, yy + 12, 2, 22, 1, fill=ACCENT)
+                cv.rrect(tx + 2, by + 12, 2, 22, 1, fill=ACCENT)
             if not value:
-                cv.text(tx + 10, yy + 23, hints[i], 16, "regular", FAINT, "lm")
-        yy += 46 + 14
+                cv.text(tx + 10, by + 23, hints[i], 16, "regular", FAINT, "lm")
+        yy = by + bh + 14
     error = c.message and not c.message.startswith(("Type", "Next child"))
     for line in msg_lines:
         cv.text(cx, yy, line, 14, "regular", _bgr("#e3b341") if error else DIM)
@@ -684,7 +935,9 @@ def _icon_warn(cv: Canvas, cx, cy):
     cv.text(cx, cy, "!", 14, "bold", BG, "cm")
 
 
-def _readiness_card(cv: Canvas, c) -> None:
+def _readiness_card(cv: Canvas, runner) -> None:
+    c = runner.ctrl
+    custom = getattr(runner, "start_area", None) is not None
     w = 470
     rows = []
     for p in c.problems:
@@ -695,8 +948,19 @@ def _readiness_card(cv: Canvas, c) -> None:
         else "You can start anyway with Start (Enter)."
     )
     foot_lines = wrap(foot, 14, "regular", w - 56)
+    tip_lines = (
+        []
+        if custom
+        else wrap(
+            "Tip: run 'python -m live.start_area' to calibrate the taped floor box.",
+            12,
+            "regular",
+            w - 56,
+        )
+    )
     body_h = 30 if not rows else sum(len(r) * 21 + 10 for r in rows)
-    h = 24 + 30 + 16 + body_h + 8 + len(foot_lines) * 20 + 22
+    tip_h = (6 + len(tip_lines) * 18) if tip_lines else 0
+    h = 24 + 30 + 16 + body_h + 8 + len(foot_lines) * 20 + tip_h + 22
     x, y = VX + 24, VY + 96
     _card(cv, x, y, w, h)
     cx, yy = x + 24, y + 24
@@ -716,6 +980,11 @@ def _readiness_card(cv: Canvas, c) -> None:
     for line in foot_lines:
         cv.text(cx, yy, line, 14, "regular", DIM)
         yy += 20
+    if tip_lines:
+        yy += 6
+        for line in tip_lines:
+            cv.text(cx, yy, line, 12, "regular", FAINT)
+            yy += 18
 
 
 def _task_leg(task: int, leg) -> str:
@@ -767,12 +1036,118 @@ def _toast(cv: Canvas, message: str) -> None:
         yy += 22
 
 
-def _score_cards(cv: Canvas, runner) -> None:
+_BADGE_POS: weakref.WeakKeyDictionary[object, tuple[float, float]] = weakref.WeakKeyDictionary()
+
+
+def _shoulder_anchor(runner) -> tuple[tuple[float, float], tuple[float, float], float] | None:
+    """Return ((right_x, right_y), (left_x, left_y), shoulder_span_px) in mirrored canvas coords."""
+    pts = getattr(runner, "last_points", None)
+    if pts is None or len(pts) <= max(b.L_SHOULDER, b.R_SHOULDER):
+        return None
+    fw, _fh = runner.frame_size
+    s, _dw, _dh, ox, oy = _stage_transform(runner.frame_size)
+
+    def to_canvas(idx: int) -> tuple[float, float] | None:
+        if float(pts[idx, 2]) < MIN_SCORE:
+            return None
+        return (VX + ox + (fw - float(pts[idx, 0])) * s, VY + oy + float(pts[idx, 1]) * s)
+
+    found = [p for idx in (b.L_SHOULDER, b.R_SHOULDER) if (p := to_canvas(idx)) is not None]
+    if len(found) == 2:
+        left_p, right_p = sorted(found, key=lambda p: p[0])
+        return right_p, left_p, max(24.0, right_p[0] - left_p[0])
+    if len(found) == 1:
+        return found[0], found[0], 60.0
+    for idx in (b.NECK, b.NOSE):
+        if (p := to_canvas(idx)) is not None:
+            return p, p, 60.0
+    return None
+
+
+def _draw_floating_score_badge(cv: Canvas, runner, live: dict) -> bool:
+    """Draw a sleek 3D-feel score badge anchored beside the person's shoulder (show_score only)."""
+    import cv2
+
+    anchor = _shoulder_anchor(runner)
+    if anchor is None:
+        return False
+    right_sh, left_sh, span = anchor
+    sc = int(live["score"])
+    task = int(live.get("task") or 1)
+    conf = float(live.get("confidence") or 0.0)
+    col = SCORE_COLOURS[sc]
+    label = SCORE_NAMES[sc]
+    is_rec = runner.ctrl.state == "recording"
+    mode_tag = "Live" if is_rec else "Preview"
+    sub = f"{mode_tag} · {conf:.0%} · {TASK_SHORT.get(task, '')}"
+
+    text_w = max(measure(label, 20, "semibold"), measure(sub, 11, "medium"))
+    bw = int(max(166, 16 + 34 + 12 + text_w + 18))
+    bh = 56
+    stem_dx = int(min(46, max(24, span * 0.28)))
+    stem_dy = 22
+
+    right_edge, left_edge = VX + VW - 16, VX + 16
+    if getattr(runner, "result", None) and runner.ctrl.state in ("idle", "ready"):
+        right_edge = VX + VW - 24 - CARD_W - 14
+    top_edge, bot_edge = VY + 86, VY + VH - 16
+    go_right = right_sh[0] + stem_dx + 14 + bw <= right_edge
+    ax, ay = right_sh if go_right else left_sh
+    tx = (ax + stem_dx + 14) if go_right else (ax - stem_dx - 14 - bw)
+    tx = max(left_edge, min(tx, right_edge - bw))
+    ty = max(top_edge, min(ay - stem_dy - bh / 2, bot_edge - bh))
+
+    prev = _BADGE_POS.get(runner)
+    if prev is None or math.hypot(tx - prev[0], ty - prev[1]) > 260.0:
+        bx, by = tx, ty
+    else:
+        bx = prev[0] + 0.28 * (tx - prev[0])
+        by = prev[1] + 0.28 * (ty - prev[1])
+    _BADGE_POS[runner] = (bx, by)
+
+    elbow_x = int(round(bx - 12)) if go_right else int(round(bx + bw + 12))
+    elbow_y = int(round(by + bh / 2))
+    attach_x = int(round(bx)) if go_right else int(round(bx + bw))
+    cv2.line(cv.img, (int(round(ax)), int(round(ay))), (elbow_x, elbow_y), col, 2, cv2.LINE_AA)
+    cv2.line(cv.img, (elbow_x, elbow_y), (attach_x, elbow_y), col, 2, cv2.LINE_AA)
+    cv.rrect(ax - 10, ay - 10, 20, 20, 10, fill=col, alpha=0.28)
+    cv.dot(ax, ay, 5, col)
+    cv.dot(ax, ay, 2, TEXT)
+
+    cv.rrect(bx + 3, by + 6, bw, bh, 16, fill=SHADOW, alpha=0.55)
+    cv.rrect(
+        bx,
+        by,
+        bw,
+        bh,
+        16,
+        fill=SURFACE,
+        alpha=0.90 if is_rec else 0.84,
+        border=col,
+        border_alpha=0.95 if is_rec else 0.78,
+        bw=2,
+    )
+    cv.rrect(bx + 14, by + 2, bw - 28, 2, 1, fill=TEXT, alpha=0.18)
+
+    cy = by + bh / 2
+    cv.dot(bx + 29, cy, 17, col)
+    cv.text(bx + 29, cy, str(sc), 19, "bold", BG, "cm")
+    cv.text(bx + 56, by + 20, label, 20, "semibold", col, "lm")
+    cv.text(bx + 56, by + 41, sub, 11, "medium", DIM, "lm")
+    return True
+
+
+def _score_cards(cv: Canvas, runner, view: str = "camera") -> None:
     """Live score and last saved try (show_score only). Reference only, never a diagnosis."""
     c = runner.ctrl
+    if c.state in ("setup", "readiness"):
+        return
     x, y, w = VX + VW - 24 - CARD_W, VY + 96, CARD_W
     live = getattr(runner, "live", None)
-    if c.state != "setup":
+    anchored = False
+    if c.state != "confirm" and view != "neutral" and live and "score" in live:
+        anchored = _draw_floating_score_badge(cv, runner, live)
+    if not anchored:
         y = _live_card(cv, live, x, y, w) + 12
     result = getattr(runner, "result", None)
     if result and c.state in ("idle", "ready"):
@@ -781,6 +1156,30 @@ def _score_cards(cv: Canvas, runner) -> None:
 
 def _live_card(cv: Canvas, live, x, y, w) -> int:
     inner = w - 40
+    if live and "hint" in live:
+        task = live.get("task")
+        detail_lines = wrap(live.get("detail", ""), 13, "regular", inner, 3)
+        h = 18 + 18 + 12 + 24 + len(detail_lines) * 18 + 16
+        _card(cv, x, y, w, h)
+        cx, yy = x + 20, y + 18
+        cv.text(cx, yy, "READY TO RECORD", 12, "semibold", DIM)
+        if task:
+            cv.text(
+                x + w - 20,
+                yy,
+                f"Task {int(task)} · {TASK_SHORT.get(int(task), '')}",
+                12,
+                "semibold",
+                DIM,
+                "rt",
+            )
+        yy += 30
+        cv.text(cx, yy, live["hint"], 17, "semibold", TEXT)
+        yy += 26
+        for line in detail_lines:
+            cv.text(cx, yy, line, 13, "regular", DIM)
+            yy += 18
+        return y + h
     if not live or "error" in live:
         detail = (
             live["error"] if live else "The score appears after about 1 s of the child in view."
@@ -839,6 +1238,8 @@ def _result_card(cv: Canvas, r: dict, x, y, w) -> None:
     _card(cv, x, y, w, h)
     cx, yy = x + 20, y + 20
     cv.text(cx, yy, "LAST SAVED TRY", 12, "semibold", DIM)
+    if r.get("try"):
+        cv.text(x + w - 20, yy, f"Try #{int(r['try'])}", 12, "semibold", DIM, "rt")
     yy += 30
     cv.text(cx, yy, head, 15, "medium", TEXT)
     yy += 34
@@ -888,14 +1289,17 @@ def render(runner, view: str = "stick", show_score: bool = False) -> Canvas:
     if c.state == "setup":
         _setup_card(cv, c)
     elif c.state == "readiness":
-        _readiness_card(cv, c)
+        _readiness_card(cv, runner)
     elif c.state == "confirm":
         _confirm_card(cv, c)
     if show_score:
-        _score_cards(cv, runner)
-    if c.state not in ("setup", "confirm"):
+        _score_cards(cv, runner, view)
+    if c.state not in ("setup", "confirm") and not (
+        c.state == "recording" and c.message == "Recording. Space stops."
+    ):
         _toast(cv, c.message)
     btns = buttons(runner)
+    _draw_bottom_bar_chrome(cv, btns)
     pointer = getattr(runner, "pointer", None)
     over = hit(btns, *pointer) if pointer else None
     for btn in btns:
@@ -958,9 +1362,9 @@ def _mouse_handler(runner, clicks: list, cv2):
     def on_mouse(event, x, y, _flags, _param):
         runner.pointer = (x, y)  # render() lights up the button under the pointer
         if event == down:
-            pressed["key"] = hit(buttons(runner), x, y)
+            pressed["key"] = hit(buttons(runner), x, y) or _setup_field_hit(runner.ctrl, x, y)
         elif event == up:
-            k = hit(buttons(runner), x, y)
+            k = hit(buttons(runner), x, y) or _setup_field_hit(runner.ctrl, x, y)
             if k is not None and k == pressed["key"]:
                 clicks.append(k)
             pressed["key"] = None

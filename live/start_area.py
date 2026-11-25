@@ -34,6 +34,7 @@ DEFAULT_PATH = Path("runs") / "start_area.json"
 FEET = b.LEFT_FOOT + b.RIGHT_FOOT  # ankles, toes, heels
 MIN_SCORE = 0.3  # a foot point with a lower score counts as not found
 MIN_IN_AREA = 0.8  # at least 80% of the found foot points must be inside the area
+TARGET_BODY_FRAC = 0.50
 WINDOW = "Start area: drag a box around the tape, Enter = save, Esc = cancel"
 
 Area = tuple[float, float, float, float]
@@ -45,10 +46,28 @@ def tidy(area) -> Area:
     return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
 
 
+def default_start_area(frame_size=(1280, 720)) -> Area:
+    """Default foot zone centered near the lower-middle of the frame (~50% standing height)."""
+    w, h = float(frame_size[0]), float(frame_size[1])
+    return 0.34 * w, 0.70 * h, 0.66 * w, 0.90 * h
+
+
+def standing_guide_lines(frame_size=(1280, 720), start_area=None) -> tuple[float, float]:
+    """Return (y_head, y_feet) in pixels for a ~50% standing body height guide."""
+    _w, h = float(frame_size[0]), float(frame_size[1])
+    box = tidy(start_area) if start_area is not None else default_start_area(frame_size)
+    y_feet = 0.5 * (box[1] + box[3])
+    y_head = max(0.08 * h, y_feet - TARGET_BODY_FRAC * h)
+    return y_head, y_feet
+
+
 def unmirror(area, width: float) -> Area:
     """A box marked on the mirrored picture -> the same place in the unmirrored picture."""
     x0, y0, x1, y1 = tidy(area)
     return tidy((width - x1, y0, width - x0, y1))
+
+
+mirror_box_x = unmirror
 
 
 def rescale(area, from_size, to_size) -> Area:
