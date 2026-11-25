@@ -18,6 +18,7 @@ Screens (Controller.state):
     readiness  live.quality.check in plain words; Enter starts (also allowed with problems)
     idle       waiting for the child to stand still at the start line
     ready      (automatic mode) the child stands still: the next movement starts the try
+    countdown  (gesture mode, app.demo) an open palm was seen: 3-2-1, then recording starts
     recording  the try is being recorded
     confirm    shows the guessed task and leg: Enter confirms, 1/2/3 and L/R correct,
                Backspace cancels the try
@@ -51,7 +52,7 @@ from app.session import AGE_RANGE_MONTHS, Session, age_in_range
 from common.body25 import TASKS
 from common.format import Try
 
-STATES = ("setup", "readiness", "idle", "ready", "recording", "confirm")
+STATES = ("setup", "readiness", "idle", "ready", "countdown", "recording", "confirm")
 DEBOUNCE_S = 0.35  # the same key again within this time is ignored (no double saves)
 READINESS_WINDOW_S = 1.5  # points used for the readiness check
 FIELDS = ("child code", "age in months", "consent level (1/2/3)")
@@ -84,12 +85,16 @@ class Controller:
     ("stop",)                       stop recording, guess      ("cancel",)     drop this try
     ("save", task, leg, corrected)  operator confirmed         ("video", on)   V pressed
     ("ready_ok",)                   readiness accepted         ("quit",)
+    ("countdown",)                  open palm seen (gesture)   ("cancel_countdown",)
     It never holds a score, so nothing it shows can contain one.
+
+    mode: "auto" (Segmenter starts and ends each try), "manual" (Space), or "gesture" (app.demo:
+    an open palm starts a 3-2-1 countdown, crossed arms stop; the Runner feeds gesture()).
     """
 
     def __init__(self, mode: str = "auto", debounce_s: float = DEBOUNCE_S):
-        if mode not in ("auto", "manual"):
-            raise ValueError("mode must be 'auto' or 'manual'")
+        if mode not in ("auto", "manual", "gesture"):
+            raise ValueError("mode must be 'auto', 'manual' or 'gesture'")
         self.mode, self.debounce_s = mode, debounce_s
         self.state = "setup"
         self.form = ["", "", ""]
@@ -98,6 +103,7 @@ class Controller:
         self.age: int | None = None
         self.consent: int | None = None
         self.video = False
+        self.paused = False
         self.preset_task: int | None = None
         self.preset_leg: str | None = None
         self.manual = False  # the current recording was started with Space
@@ -138,7 +144,7 @@ class Controller:
     def _new_form(self):
         self.state, self.form, self.field = "setup", ["", "", ""], 0
         self.child = self.age = self.consent = None
-        self.video, self.preset_task, self.preset_leg = False, None, None
+        self.video, self.paused, self.preset_task, self.preset_leg = False, False, None, None
         self.tries_saved = 0
         self.message = "Next child: type the child code, then Enter."
 
@@ -229,36 +235,82 @@ class Controller:
                 self.message = "Started although the readiness check listed problems."
             elif self.mode == "manual":
                 self.message = "Ready. Press Space to start a try."
+            elif self.mode == "gesture":
+                self.message = "Ready. Show an open hand to the camera to start recording."
             else:
                 self.message = "Ready. Stand at the start line to start automatically."
             return [("ready_ok",)]
         return []
 
     def _preset(self, k: str) -> bool:
+        if k == "0":
+            self.preset_task = None
+            self.preset_leg = None
+            self.message = "Task and leg set to auto-detect."
+            return True
         if k in ("1", "2", "3"):
             self.preset_task = int(k)
+            if self.preset_task == 3:
+                self.preset_leg = None
+                self.message = f"Task 3 ({TASKS[3]}) prioritized. Press 0 for auto."
+            else:
+                leg_note = f", leg {self.preset_leg}" if self.preset_leg else ""
+                self.message = (
+                    f"Task {self.preset_task} ({TASKS[self.preset_task]}{leg_note}) prioritized. "
+                    "Press 0 for auto."
+                )
             return True
         if k in ("L", "R"):
             if self.preset_task == 3:
                 self.message = "Task 3 is a jump with both feet: no leg to choose."
             else:
                 self.preset_leg = k
+                if self.preset_task is not None:
+                    self.message = (
+                        f"Task {self.preset_task} ({TASKS[self.preset_task]}, leg {k}) prioritized. "
+                        "Press 0 for auto."
+                    )
+                else:
+                    self.message = f"Support leg {k} prioritized. Press 0 for auto."
             return True
         return False
 
     def _start(self, how: str) -> list[tuple]:
         self.state, self.manual = "recording", how == "manual"
-        self.message = "Recording." + (" Space stops." if self.manual else "")
+        if self.mode == "gesture":
+            self.message = "Recording. Cross your arms (X) or press Space to stop."
+        else:
+            self.message = "Recording." + (" Space stops." if self.manual else "")
         return [("start", how)]
 
     def _idle_key(self, k: str) -> list[tuple]:
         if self._preset(k):
             return []
+        if k == "P" and self.mode in ("auto", "gesture"):
+            self.paused = not self.paused
+            what = "Gesture start" if self.mode == "gesture" else "Auto-recording"
+            if self.paused:
+                self.state = "idle"
+                self.message = f"{what} paused. Press P to resume or Space to record manually."
+            elif self.mode == "gesture":
+                self.message = "Gesture start resumed. Show an open hand to the camera."
+            else:
+                self.message = "Auto-recording resumed. Stand still at the start line."
+            return [("pause", self.paused)]
         if k == "SPACE":
             return self._start("manual")
         return []
 
     _ready_key = _idle_key
+
+    def _countdown_key(self, k: str) -> list[tuple]:
+        if k == "BACKSPACE":
+            self.state = "idle"
+            self.message = "Countdown cancelled."
+            return [("cancel_countdown",)]
+        if k == "SPACE":
+            return self._start("manual")
+        return []
 
     def _recording_key(self, k: str) -> list[tuple]:
         if self._preset(k):
@@ -302,11 +354,36 @@ class Controller:
                 self.state = "idle"
                 return [("stop",)]
             return []
+        if self.paused:
+            return []
         if event == "start":
             return self._start("auto")
         if event in ("ready", "idle"):
             self.state = event
         return []
+
+    def gesture(self, event: str) -> list[tuple]:
+        """Gesture mode: "palm" (open hand held) starts the countdown, "cross" (X) stops."""
+        if self.mode != "gesture":
+            return []
+        if event == "palm" and self.state == "readiness":  # the palm also accepts readiness
+            actions = self._readiness_key("ENTER")
+            self.state = "countdown"
+            self.message = "Get ready. Backspace cancels."
+            return actions + [("countdown",)]
+        if event == "palm" and self.state in ("idle", "ready") and not self.paused:
+            self.state = "countdown"
+            self.message = "Get ready. Backspace cancels."
+            return [("countdown",)]
+        if event == "cross" and self.state == "recording":
+            self.state = "idle"
+            return [("stop",)]
+        return []
+
+    def countdown_done(self) -> list[tuple]:
+        if self.state != "countdown":
+            return []
+        return self._start("gesture")
 
     def set_guess(self, task: int, leg: str, confidence: float):
         """The Runner guessed the task and leg of the try that just stopped."""
@@ -499,6 +576,9 @@ class Runner:
         self.seg.reset()
         self.tracker.reset()  # the child stands at the start line now: lock on them
 
+    def _do_pause(self, _paused: bool):
+        self.seg.reset()
+
     def _do_start(self, how):
         self.buf = list(self.pre)  # keep the pre-roll before the start (points only, no video)
         self.pending = None
@@ -541,12 +621,25 @@ class Runner:
         self.ctrl.set_guess(task, leg, conf)
 
     def _do_save(self, task, leg, corrected):
-        from app.main import score_try
-        from features.clues import timeline
-
         p, self.pending = self.pending, None
         if p is None or self.session is None:
             return
+        # The points are saved even if the video fails; the log's video column says whether a
+        # clip was really written, and the JSON names the clip.
+        video_path = self._close_video(keep=True)
+        self._write_try(p, task, leg, corrected, video_path)
+        self.seg.reset()
+
+    def _write_try(self, p: dict, task, leg, corrected, video_path) -> Path | None:
+        """Score one try (p = {"tr", "raw26", "guess"}) and save it with Session.save_try.
+
+        video_path: the clip of this try (or of the whole recording in gesture mode), or None.
+        """
+        from app.main import score_try
+        from features.clues import timeline
+
+        if self.session is None:
+            return None
         tr = p["tr"]
         gt, gl, gc = p["guess"]
         try:
@@ -554,9 +647,6 @@ class Runner:
             events = timeline(task, tr.points, tr.t)
         except ValueError as e:  # e.g. no torso found in any frame
             clues, score, confidence, reasons, events = {}, 1, 0.0, f"not scored: {e}", None
-        # The points are saved even if the video fails; the log's video column says whether a
-        # clip was really written, and the JSON names the clip.
-        video_path = self._close_video(keep=True)
         if video_path is not None:
             tr.meta["video_file"] = video_path.name
         v_flag, self.session.video = self.session.video, video_path is not None
@@ -584,7 +674,7 @@ class Runner:
             self.ctrl.message += " Video saved."
         elif self.video_error:
             self.ctrl.message += f" {self.video_error} (points are saved)."
-        self.seg.reset()
+        return path
 
 
 # ---------------------------------------------------------------------- drawing
@@ -764,7 +854,12 @@ def main(argv=None) -> int:
     src.add_argument("--fake", action="store_true", help="fake tries in a loop")
     src.add_argument("--video", type=Path, help="a recorded clip (needs rtmlib)")
     src.add_argument("--camera", type=int, help="webcam index (needs rtmlib)")
-    ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
+    ap.add_argument(
+        "--mode",
+        choices=["auto", "manual", "gesture"],
+        default=None,
+        help="default: gesture with --show-score (open palm starts, crossed arms stop), else auto",
+    )
     ap.add_argument(
         "--view",
         choices=["stick", "camera", "neutral"],
@@ -786,6 +881,9 @@ def main(argv=None) -> int:
         "(app.demo); without it the screen shows no score",
     )
     args = ap.parse_args(argv)
+    mode = args.mode or ("gesture" if args.show_score else "auto")
+    if mode == "gesture" and not args.show_score:
+        ap.error("--mode gesture needs --show-score (it is the app.demo flow)")
 
     if args.fake:
         stream, size, source = FakeLoopStream(), (1280, 720), "fake"
@@ -805,16 +903,17 @@ def main(argv=None) -> int:
         saved = run_demo(
             stream,
             args.out,
-            mode=args.mode,
+            mode=mode,
             frame_size=size,
             source=source,
             view=args.view or "camera",
+            device=args.device,
         )
     else:
         saved = run_gui(
             stream,
             args.out,
-            mode=args.mode,
+            mode=mode,
             view=args.view or "stick",
             frame_size=size,
             source=source,

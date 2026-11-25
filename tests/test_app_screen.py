@@ -138,3 +138,25 @@ def test_text_wrap_and_fonts():
     assert len(lines) == 2 and lines[-1].endswith("…")
     for w in ("regular", "medium", "semibold", "bold"):
         assert screen.measure("Gross Motor Screening", 16, w) > 50
+
+
+def test_window_is_drawn_at_the_screen_shape():
+    """Mac 1512x982 points: drawn at that size; a 16:9 camera fills the height, sides cut a bit."""
+    assert screen.canvas_size((1512, 982)) == (1512, 982)
+    assert screen.canvas_size((2560, 1440)) == (1920, 1080)  # big screens: at most 1080 tall
+    assert screen.canvas_size((1024, 600))[1] == 720
+    old = (screen.W, screen.H)
+    try:
+        screen.set_size(1512, 982)
+        s, dw, dh, ox, oy = screen._stage_transform((1280, 720))
+        assert dh == 982 and oy == 0 and -0.08 * dw <= ox < 0
+        s, dw, dh, ox, oy = screen._stage_transform((640, 480))  # 4:3: never cut, bars instead
+        assert ox >= 0 and oy >= 0
+        r = Runner("unused", mode="manual")
+        r.ctrl.state = "idle"
+        r.last_frame = np.full((720, 1280, 3), 90, np.uint8)
+        img = screen.render(r, "camera").img
+        assert img.shape == (982, 1512, 3)
+        assert img[491, 2].mean() > 40  # the camera picture reaches the edge (no side bar)
+    finally:
+        screen.set_size(*old)

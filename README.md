@@ -51,6 +51,10 @@ The first line must be `files: 4661 | children: 106 | attempts: 1555`.
 **Open the GUI with a double-click:** `Open GUI.command` (Mac, Finder) or `Open GUI.bat`
 (Windows + NVIDIA, Explorer) in the repo root. The first time on a Mac, allow Terminal to use the camera.
 Keys still work; every key is also a button in the bottom bar.
+The window starts recording when you hold an **open palm** to the camera (3-2-1 in the middle),
+reads every task you do in a row (stand, hop, jump: a card per task), and stops on **crossed arms
+(X)**. Space starts/stops at once. Fetch the hand model once (needs internet):
+`python -m live.gesture --download`. The old stand-still start: add `--mode auto`.
 
 ```bash
 python -m app.main                           # open live webcam GUI (testing mode: no score shown)

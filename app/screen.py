@@ -1,14 +1,21 @@
-"""The one window of the live laptop. Owner: Daryn.
+"""The one fullscreen window of the live laptop. Owner: Daryn.
 
 Both entry points draw with this module:
     python -m app.ui ...                 testing mode: never a score on screen (show_score=False)
     python -m app.ui ... --show-score    and python -m app.demo: live score + last saved try
 
-Look: the camera picture (or the stick figure) in a rounded frame whose edge takes the colour of
-the state, a top bar with the state and the child, cards for the setup form, the readiness check
-and the confirm step, and a bottom bar of buttons. Every button is also a key (written on the
-button), so the keyboard works as before; a click sends the same key to Controller.
-With show_score=True a card on the right shows the live score and the last saved try.
+Look: edge-to-edge fullscreen camera (or stick figure) with a minimal, cardless typographic HUD
+over soft edge scrims so every metric (FPS, feet visibility, state, task, live score) stays legible
+without heavy boxes. Every keyboard shortcut is also clickable; pressing F toggles fullscreen.
+Setup and confirm states use focused centered panels for typing or verifying an uncertain try.
+Gesture mode (app.demo, show_score): a big 3-2-1 in the middle, a ring on the wrist or the crossed
+arms while a gesture is held, the result of each attempt in large type (no box, fades in and out),
+the attempts of the recording on the right and a summary after the X.
+
+Size: run_window draws at the screen's own size (set_size(canvas_size(screen_size()))), so the
+fullscreen window has no bars and nothing is stretched (Mac: 1512x982 points). The camera picture
+fills the height; on a 16:10 screen a little of both sides of a 16:9 camera is cut on screen only
+(MAX_SIDE_CROP); pose detection always used the whole picture.
 
 Text is drawn with Pillow in the system font (SF Pro on Mac, Segoe UI on Windows, DejaVu Sans from
 matplotlib otherwise). render() only reads the Runner, never changes it. With show_score=False it
@@ -33,12 +40,61 @@ import numpy as np
 from app.session import AGE_RANGE_MONTHS, age_in_range
 from common import body25 as b
 
-W, H = 1280, 792  # window picture (pixels)
-PAD = 16
-VX, VY, VW, VH = PAD, PAD, W - 2 * PAD, 702  # video frame, 1248 x 702 = 16:9
-BAR_Y, BAR_H = VY + VH + 12, 46  # bottom bar of buttons
-RADIUS = 16
-CARD_W = 320  # score cards on the right (show_score only)
+W, H = 1280, 720  # changed by set_size() when the window opens
+PAD = 24
+VX, VY, VW, VH = 0, 0, W, H
+BAR_H = 36
+BAR_Y = H - BAR_H - 6
+RADIUS = 0
+CARD_W = 320
+MAX_CANVAS_H = 1080  # bigger screens are drawn at this height and scaled up by the window
+MIN_CANVAS_H = 720
+MAX_SIDE_CROP = 0.08  # on screen only: cut at most this much of each side of the camera picture
+
+
+def set_size(w: int, h: int) -> None:
+    """Draw every picture at w x h from now on (run_window: the screen's own size)."""
+    global W, H, VW, VH, BAR_Y
+    W, H = int(w), int(h)
+    VW, VH = W, H
+    BAR_Y = H - BAR_H - 6
+    _backdrop.cache_clear()
+
+
+def screen_size() -> tuple[int, int] | None:
+    """Size of the main display in points (Mac: CoreGraphics; Windows: user32), or None."""
+    import ctypes
+
+    try:
+        if sys.platform == "darwin":
+            import ctypes.util
+
+            cg = ctypes.CDLL(ctypes.util.find_library("CoreGraphics"))
+            cg.CGMainDisplayID.restype = ctypes.c_uint32
+            for name in ("CGDisplayPixelsWide", "CGDisplayPixelsHigh"):
+                getattr(cg, name).restype = ctypes.c_size_t
+                getattr(cg, name).argtypes = [ctypes.c_uint32]
+            d = cg.CGMainDisplayID()
+            w, h = int(cg.CGDisplayPixelsWide(d)), int(cg.CGDisplayPixelsHigh(d))
+        elif sys.platform == "win32":
+            user32 = ctypes.windll.user32
+            w, h = int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+        else:
+            return None
+    except (OSError, AttributeError, TypeError):
+        return None
+    return (w, h) if w > 0 and h > 0 else None
+
+
+def canvas_size(screen: tuple[int, int]) -> tuple[int, int]:
+    """The drawing size for a screen: its own shape, MIN..MAX_CANVAS_H tall, even numbers."""
+    w, h = screen
+    k = min(1.0, MAX_CANVAS_H / h)
+    if h * k < MIN_CANVAS_H:
+        k = MIN_CANVAS_H / h
+    return int(round(w * k / 2)) * 2, int(round(h * k / 2)) * 2
+
+
 WINDOW_TITLE = "Gross motor screening (screening aid, not a diagnosis)"
 
 
@@ -47,57 +103,56 @@ def _bgr(hex_colour: str) -> tuple[int, int, int]:
     return int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16)
 
 
-BG = _bgr("#0d1117")
-SURFACE = _bgr("#161b22")
-RAISED = _bgr("#21262d")
-LINE = _bgr("#30363d")
-TEXT = _bgr("#f0f6fc")
-DIM = _bgr("#9198a1")
-FAINT = _bgr("#6e7681")
-ACCENT = _bgr("#2f81f7")
-GREEN = _bgr("#238636")
-RED = _bgr("#da3633")
-AMBER = _bgr("#d29922")
-PURPLE = _bgr("#a371f7")
+BG = _bgr("#090d12")
+SURFACE = _bgr("#131922")
+RAISED = _bgr("#1e2632")
+LINE = _bgr("#303846")
+TEXT = _bgr("#f6f8fa")
+DIM = _bgr("#c9d1d9")
+FAINT = _bgr("#9ea7b3")
+ACCENT = _bgr("#79c0ff")
+GREEN = _bgr("#56d364")
+RED = _bgr("#ff7b72")
+AMBER = _bgr("#f8d46c")
+PURPLE = _bgr("#d2a8ff")
 LETTERBOX = _bgr("#05070a")
-NEUTRAL = _bgr("#1c2128")
-SHADOW = _bgr("#0b0d10")
+NEUTRAL = _bgr("#181e26")
+SHADOW = _bgr("#05070a")
 
 STATE_COLOURS = {
-    "setup": _bgr("#8b949e"),
-    "readiness": _bgr("#58a6ff"),
-    "idle": _bgr("#8b949e"),
-    "ready": _bgr("#3fb950"),
-    "recording": _bgr("#f85149"),
-    "confirm": _bgr("#d29922"),
+    "setup": _bgr("#9ea7b3"),
+    "readiness": ACCENT,
+    "idle": _bgr("#c9d1d9"),
+    "ready": GREEN,
+    "countdown": AMBER,
+    "recording": RED,
+    "confirm": AMBER,
 }
 STATE_NAMES = {
     "setup": "New child",
     "readiness": "Readiness check",
     "idle": "Waiting",
     "ready": "Ready",
+    "countdown": "Get ready",
     "recording": "Recording",
     "confirm": "Check the try",
 }
-SCORE_NAMES = dict(b.LABELS)  # 0 Bad, 1 Good, 2 Perfect
-SCORE_COLOURS = {0: _bgr("#f85149"), 1: _bgr("#e3b341"), 2: _bgr("#3fb950")}
+SCORE_NAMES = dict(b.LABELS)
+SCORE_COLOURS = {0: RED, 1: AMBER, 2: GREEN}
 SCORE_WORDS = {
     0: "did not complete the task this time",
     1: "completed the task with some difficulty",
     2: "completed the task smoothly",
 }
 TASK_SHORT = {1: "Stand", 2: "Hop", 3: "Jump"}
+MODE_NAMES = {"auto": "Auto", "manual": "Manual", "gesture": "Gesture"}
 
-# Stick figure: right side orange, left side blue, middle white (as in viz.replay).
 _RIGHT_PTS = {b.R_SHOULDER, b.R_ELBOW, b.R_WRIST, b.R_HIP, b.R_KNEE, b.R_ANKLE, b.R_EYE, b.R_EAR}
 _RIGHT_PTS |= set(b.RIGHT_FOOT)
 _LEFT_PTS = {b.L_SHOULDER, b.L_ELBOW, b.L_WRIST, b.L_HIP, b.L_KNEE, b.L_ANKLE, b.L_EYE, b.L_EAR}
 _LEFT_PTS |= set(b.LEFT_FOOT)
 FIG_RIGHT, FIG_LEFT, FIG_MID = _bgr("#ff9f43"), _bgr("#4da3ff"), _bgr("#f0f6fc")
-MIN_SCORE = 0.05  # same as viz.replay: a point with a lower score is not drawn
-
-
-# ---------------------------------------------------------------------- fonts and text
+MIN_SCORE = 0.05
 
 _WEIGHTS = ("regular", "medium", "semibold", "bold")
 
@@ -153,7 +208,7 @@ def _font(size: int, weight: str = "regular"):
                 try:
                     font.set_variation_by_name(variation)
                 except (OSError, ValueError):
-                    pass  # keep the default weight
+                    pass
             return font
         except OSError:
             pass
@@ -187,6 +242,18 @@ def _ink(s: str, size: int, weight: str) -> np.ndarray:
     return np.asarray(im, dtype=np.float32)[..., None] / 255.0
 
 
+@lru_cache(maxsize=512)
+def _halo(s: str, size: int, weight: str) -> tuple[np.ndarray, int]:
+    """A soft dark halo that follows the letters (blurred ink), and its padding in pixels."""
+    import cv2
+
+    ink = _ink(s, size, weight)[..., 0]
+    pad = max(3, size // 6)
+    big = np.pad(ink, pad)
+    halo = cv2.GaussianBlur(big, (0, 0), sigmaX=pad / 2.2)
+    return np.clip(halo * 2.2, 0, 1)[..., None], pad
+
+
 def wrap(s: str, size: int, weight: str, max_w: float, max_lines: int | None = None) -> list[str]:
     """Greedy word wrap; the last kept line ends with an ellipsis if text was cut."""
     lines, cur = [], ""
@@ -206,9 +273,6 @@ def wrap(s: str, size: int, weight: str, max_w: float, max_lines: int | None = N
             last = last[:-1]
         lines[-1] = last.rstrip() + "…"
     return lines
-
-
-# ---------------------------------------------------------------------- shapes
 
 
 @lru_cache(maxsize=512)
@@ -246,19 +310,35 @@ def _backdrop() -> np.ndarray:
     yy, xx = np.mgrid[0:VH, 0:VW].astype(np.float32)
     d = np.sqrt(((xx - VW / 2) / (VW / 2)) ** 2 + ((yy - VH * 0.45) / (VH / 2)) ** 2)
     t = np.clip(d / 1.3, 0, 1)[..., None]
-    inner, outer = np.array(_bgr("#1b222c"), np.float32), np.array(BG, np.float32)
+    inner, outer = np.array(_bgr("#18202a"), np.float32), np.array(BG, np.float32)
     noise = np.random.default_rng(0).uniform(-0.5, 0.5, (VH, VW, 1)).astype(np.float32)
-    return np.clip(inner * (1 - t) + outer * t + 0.5 + noise, 0, 255).astype(np.uint8)  # dither
+    return np.clip(inner * (1 - t) + outer * t + 0.5 + noise, 0, 255).astype(np.uint8)
 
 
 def _lighten(c, f: float = 0.14):
     return tuple(int(v + (255 - v) * f) for v in c)
 
 
+@lru_cache(maxsize=64)
+def _blob_mask(w: int, h: int, feather: int) -> np.ndarray:
+    """Alpha (h, w, 1): 1 in the middle, easing to 0 at every edge (a shadow with no edge)."""
+
+    def ramp(n: int) -> np.ndarray:
+        f = max(1, min(feather, n // 2))
+        r = np.ones(n, np.float32)
+        u = np.linspace(0, 1, f, dtype=np.float32)
+        u = u * u * (3 - 2 * u)
+        r[:f], r[n - f :] = u, u[::-1]
+        return r
+
+    return (ramp(h)[:, None] * ramp(w)[None, :])[..., None]
+
+
 class Canvas:
     """The window picture plus every string drawn on it (tests read .texts)."""
 
-    def __init__(self, w: int = W, h: int = H, bg=BG):
+    def __init__(self, w: int | None = None, h: int | None = None, bg=BG):
+        w, h = W if w is None else w, H if h is None else h
         self.img = np.empty((h, w, 3), np.uint8)
         self.img[:] = bg
         self.texts: list[str] = []
@@ -275,8 +355,23 @@ class Canvas:
         c = np.asarray(colour, np.float32)
         reg[:] = (reg + (c - reg) * a + 0.5).astype(np.uint8)
 
-    def text(self, x, y, s, size=16, weight="regular", colour=TEXT, anchor="lt", alpha=1.0):
-        """anchor: l/c/r then t (top of the line box), m (middle of capitals) or b (baseline)."""
+    def text(
+        self,
+        x,
+        y,
+        s,
+        size=16,
+        weight="regular",
+        colour=TEXT,
+        anchor="lt",
+        alpha=1.0,
+        shadow: bool = False,
+        glow: float = 0.0,
+    ):
+        """anchor: l/c/r then t (top of the line box), m (middle of capitals) or b (baseline).
+
+        glow (0..1): a soft dark halo around the letters, so big text reads on any picture
+        without a box behind it."""
         s = str(s)
         if not s:
             return 0.0
@@ -292,7 +387,13 @@ class Canvas:
         elif anchor[1] == "b":
             y -= asc
         ink = _ink(s, size, weight)
-        self.paint(int(round(x)) - 2, int(round(y)), ink if alpha >= 1 else ink * alpha, colour)
+        px, py = int(round(x)) - 2, int(round(y))
+        if glow > 0:
+            halo, pad = _halo(s, size, weight)
+            self.paint(px - pad, py - pad + max(1, size // 24), halo * (glow * alpha), SHADOW)
+        if shadow:
+            self.paint(px + 1, py + 1, ink * (0.75 * alpha), SHADOW)
+        self.paint(px, py, ink if alpha >= 1 else ink * alpha, colour)
         return w
 
     def rrect(self, x, y, w, h, r, fill=None, alpha=1.0, border=None, bw=1, border_alpha=1.0):
@@ -319,6 +420,8 @@ class Canvas:
 
     def round_corners(self, x, y, w, h, r, bg=BG):
         """Cut the corners of a picture already drawn at (x, y, w, h) back to bg."""
+        if r <= 0:
+            return
         m = 1.0 - _rr_mask(2 * r, 2 * r, r)
         self.paint(x, y, m[:r, :r], bg)
         self.paint(x + w - r, y, m[:r, r:], bg)
@@ -332,19 +435,38 @@ class Canvas:
         reg[:] = cv2.convertScaleAbs(reg, alpha=factor)
 
     def fade(self, x, y, w, h, colour, a_top: float, a_bottom: float):
-        """Vertical fade of colour over the picture (eased), e.g. to make the top bar readable."""
+        """Vertical eased fade of colour over the picture."""
         t = np.linspace(0, 1, h, dtype=np.float32)
         t = t * t * (3 - 2 * t)
         a = (a_top + (a_bottom - a_top) * t)[:, None, None]
         self.paint(x, y, np.broadcast_to(a, (h, w, 1)), colour)
+
+    def fade_x(self, x, y, w, h, colour, a_left: float, a_right: float, v_feather: int = 56):
+        """Soft 2D feathered horizontal scrim (smooth on top/bottom too, zero hard edges)."""
+        tx = np.linspace(0, 1, w, dtype=np.float32)
+        tx = tx * tx * (3 - 2 * tx)
+        ax = (a_left + (a_right - a_left) * tx)[None, :]
+        ay = np.ones((h, 1), dtype=np.float32)
+        vf = min(v_feather, h // 2)
+        if vf > 1:
+            ramp = np.linspace(0, 1, vf, dtype=np.float32)
+            ramp = ramp * ramp * (3 - 2 * ramp)
+            ay[:vf, 0] = ramp
+            ay[-vf:, 0] = ramp[::-1]
+        a = (ay * ax)[..., None]
+        self.paint(x, y, a, colour)
 
     def dot(self, cx, cy, r, colour):
         import cv2
 
         cv2.circle(self.img, (int(cx * 4), int(cy * 4)), int(r * 4), colour, -1, cv2.LINE_AA, 2)
 
-
-# ---------------------------------------------------------------------- stick figure
+    def soft(self, x, y, w, h, alpha: float, feather: int = 48, colour=BG):
+        """A dark patch with no edge behind text (so text reads on any camera picture)."""
+        w, h = int(round(w)), int(round(h))
+        if w <= 0 or h <= 0 or alpha <= 0:
+            return
+        self.paint(int(round(x)), int(round(y)), _blob_mask(w, h, feather) * alpha, colour)
 
 
 def _side(i: int):
@@ -360,7 +482,7 @@ def draw_skeleton(img, pts: np.ndarray, scale: float, ox: float, oy: float) -> N
     import cv2
 
     ok = pts[:, 2] > MIN_SCORE
-    q = np.round((pts[:, :2] * scale + (ox, oy)) * 4).astype(int)  # 2 bits of sub-pixel
+    q = np.round((pts[:, :2] * scale + (ox, oy)) * 4).astype(int)
     p = [(int(u), int(v)) for u, v in q]
     bones = [(i, j) for i, j in b.BONES if ok[i] and ok[j]]
     for i, j in bones:
@@ -375,12 +497,9 @@ def draw_skeleton(img, pts: np.ndarray, scale: float, ox: float, oy: float) -> N
         cv2.circle(img, p[i], r * 4, _side(int(i)), -1, cv2.LINE_AA, 2)
 
 
-# ---------------------------------------------------------------------- buttons
-
-
 @dataclass
 class Button:
-    """A clickable key. key=None is a plain label in the bar."""
+    """A clickable keyboard shortcut or plain HUD label in the bottom strip."""
 
     key: str | None
     label: str
@@ -389,12 +508,12 @@ class Button:
     colour: tuple = ACCENT
     selected: bool = False
     dot: tuple | None = None
-    group: str = ""  # segments sharing a group name render inside one pill track
+    group: str = ""
     x: int = 0
     y: int = 0
     w: int = 0
     h: int = 0
-    pad: int = 16  # inside left edge; buttons() makes it smaller when the bar is tight
+    pad: int = 12
 
     def contains(self, px, py) -> bool:
         return (
@@ -404,91 +523,100 @@ class Button:
         )
 
 
-_LABEL = (14, "semibold")
-_CAP = (11, "medium")
-_GROUP_GAP = 24  # least space between the left and the right group of the bar
-_SEG_H = 38
-_SEG_PAD = 4
-
-
-def _cap_gap(pad: int) -> int:
-    """Space before and after the key cap: 9 px at the full 16 px pad."""
-    return round(pad * 9 / 16)
+_LABEL = (13, "semibold")
+_CAP = (11, "semibold")
+_GROUP_GAP = 20
 
 
 def _width(btn: Button) -> int:
     if btn.kind == "label":
         return math.ceil(measure(btn.label, 12, "semibold"))
-    p = btn.pad if btn.kind != "seg" else max(10, btn.pad - 3)
+    p = btn.pad if btn.kind != "seg" else max(8, btn.pad - 2)
     w = p + measure(btn.label, *_LABEL) + p
     if btn.dot:
-        w += 13
-    if btn.cap:  # label, gap, key cap, gap (see _draw_button)
-        cap_w = max(20.0, measure(btn.cap, *_CAP) + 12)
-        w += _cap_gap(p) + cap_w + _cap_gap(p) - p
+        w += 12
+    if btn.cap:
+        cap_w = max(18.0, measure(btn.cap, *_CAP) + 10)
+        w += cap_w + 7
     return math.ceil(w)
 
 
 def _place(left: list[Button], right: list[Button], pad: int) -> bool:
-    """Lay out the left group from the left edge and the right group from the right edge.
-    True if both fit with at least _GROUP_GAP between them."""
-    x = VX
-    seg_y = BAR_Y + (BAR_H - _SEG_H) // 2
-    for i, btn in enumerate(left):
+    """Lay out the left and right groups inside [VX + PAD, VX + VW - PAD]."""
+    x = VX + PAD
+    for btn in left:
         if btn.kind == "gap":
-            x += 18
+            x += 16
             continue
-        btn.pad = pad if btn.kind != "seg" else max(10, pad - 3)
-        if btn.kind == "seg":
-            prev_same = i > 0 and left[i - 1].group == btn.group
-            if not prev_same:
-                x += _SEG_PAD
-            btn.x, btn.y, btn.w, btn.h = x, seg_y, _width(btn), _SEG_H
-            next_same = i + 1 < len(left) and left[i + 1].group == btn.group
-            x += btn.w + (3 if next_same else _SEG_PAD)
-        else:
-            btn.x, btn.y, btn.w, btn.h = x, BAR_Y, _width(btn), BAR_H
-            x += btn.w + (10 if btn.kind == "label" else 8)
-    x = VX + VW
+        btn.pad = pad if btn.kind != "seg" else max(8, pad - 2)
+        btn.x, btn.y, btn.w, btn.h = x, BAR_Y, _width(btn), BAR_H
+        x += btn.w + (10 if btn.kind == "label" else 6)
+    x = VX + VW - PAD
     for i, btn in enumerate(reversed(right)):
         btn.pad = pad
         btn.w, btn.y, btn.h = _width(btn), BAR_Y, BAR_H
         btn.x = x - btn.w
         next_idx = len(right) - 2 - i
-        extra = 14 if btn.kind == "primary" and next_idx >= 0 else 8
+        extra = 12 if btn.kind == "primary" and next_idx >= 0 else 6
         x = btn.x - extra
     shown = [b for b in left if b.kind != "gap"]
-    left_end = max((b.x + b.w for b in shown), default=VX)
-    right_start = min((b.x for b in right), default=VX + VW)
+    left_end = max((b.x + b.w for b in shown), default=VX + PAD)
+    right_start = min((b.x for b in right), default=VX + VW - PAD)
     gap = _GROUP_GAP if shown and right else 0
     return left_end + gap <= right_start
 
 
 def buttons(runner) -> list[Button]:
-    """The bottom bar for the current state, laid out. Pure: the same Runner gives the same bar."""
+    """Bottom keyboard strip for the current state. Pure: the same Runner gives the same items."""
     c = runner.ctrl
     st = c.state
     left: list[Button] = []
     right: list[Button] = []
     if st == "setup":
-        left.append(Button(None, "Type with the keyboard", kind="label"))
+        left.append(Button(None, "Type with keyboard · Tab / Enter next", kind="label"))
         nxt = "Continue" if c.field == 2 else "Next"
         right += [
             Button("ESC", "Quit", "Esc", "danger"),
             Button("ENTER", nxt, "Enter", "primary"),
         ]
     elif st == "readiness":
+        left.append(Button(None, "Press F to toggle fullscreen", kind="label"))
         right += [
             Button("N", "Next child", "N"),
             Button("Q", "Quit", "Q", "danger"),
             Button("ENTER", "Start", "Enter", "primary", GREEN),
         ]
     elif getattr(runner, "auto_flow", False) and st != "confirm":
-        # Demo + auto mode (app.demo.DemoRunner): the task and leg are detected, so no task/leg
-        # buttons. The keys 1/2/3 and L/R still work as a hidden backup. The confirm step
-        # (an unsure guess) shows them again below.
-        left.append(Button(None, "TASK · DETECTED AUTOMATICALLY", kind="label"))
-        right += _idle_or_recording_buttons(c, st)
+        if c.preset_task is not None:
+            leg_s = f" · {c.preset_leg}" if c.preset_leg and c.preset_task != 3 else ""
+            left.append(
+                Button(
+                    None,
+                    f"LOCKED · Task {c.preset_task} {TASK_SHORT[c.preset_task]}{leg_s}",
+                    kind="label",
+                    colour=AMBER,
+                )
+            )
+            left.append(Button("0", "Auto", "0", "ghost"))
+        elif c.preset_leg is not None:
+            left.append(
+                Button(
+                    None,
+                    f"LEG {c.preset_leg} · 1/2/3 lock task",
+                    kind="label",
+                    colour=AMBER,
+                )
+            )
+            left.append(Button("0", "Auto", "0", "ghost"))
+        elif c.mode == "gesture":
+            left.append(
+                Button(None, "OPEN HAND TO START · ARMS X TO STOP", kind="label", colour=DIM)
+            )
+        else:
+            left.append(
+                Button(None, "AUTO DETECT · 1/2/3 lock task · L/R leg", kind="label", colour=DIM)
+            )
+        right += _idle_or_recording_buttons(c, st, show_pause=True)
     else:
         task = c.choice_task if st == "confirm" else c.preset_task
         leg = c.choice_leg if st == "confirm" else c.preset_leg
@@ -498,7 +626,7 @@ def buttons(runner) -> list[Button]:
                 Button(str(k), TASK_SHORT[k], str(k), "seg", selected=task == k, group="task")
             )
         left.append(Button(None, "", kind="gap"))
-        if task == 3:  # standing long jump: both feet, no support leg to choose
+        if task == 3:
             left.append(Button(None, "BOTH FEET", kind="label"))
         else:
             left.append(Button(None, "LEG" if leg else "LEG · AUTO", kind="label"))
@@ -510,18 +638,30 @@ def buttons(runner) -> list[Button]:
                 Button("ENTER", "Save", "Enter", "primary"),
             ]
         else:
-            right += _idle_or_recording_buttons(c, st)
-    # Wider system fonts (DejaVu Sans on Linux) need tighter buttons to fit the same bar.
-    for pad in (16, 14, 12, 10, 8):
+            right += _idle_or_recording_buttons(c, st, show_pause=False)
+    for pad in (12, 10, 8, 6):
         if _place(left, right, pad):
             break
     return [btn for btn in left + right if btn.kind != "gap"]
 
 
-def _idle_or_recording_buttons(c, st: str) -> list[Button]:
-    """Right group of the bar while waiting (idle/ready) or recording."""
+def _idle_or_recording_buttons(c, st: str, *, show_pause: bool = False) -> list[Button]:
+    """Right group of the bottom strip while waiting (idle/ready) or recording."""
     right: list[Button] = []
     if st in ("idle", "ready"):
+        if show_pause and c.mode in ("auto", "gesture"):
+            paused = bool(getattr(c, "paused", False))
+            what = "gesture" if c.mode == "gesture" else "auto"
+            right.append(
+                Button(
+                    "P",
+                    f"Resume {what}" if paused else f"Pause {what}",
+                    "P",
+                    selected=paused,
+                    colour=AMBER,
+                    dot=AMBER if paused else None,
+                )
+            )
         if c.consent == 3:
             on = bool(c.video)
             right.append(
@@ -539,6 +679,11 @@ def _idle_or_recording_buttons(c, st: str) -> list[Button]:
             Button("Q", "Quit", "Q", "danger"),
             Button("SPACE", "Start", "Space", "primary", GREEN),
         ]
+    elif st == "countdown":
+        right += [
+            Button("BACKSPACE", "Cancel", "Backspace", "danger"),
+            Button("SPACE", "Start now", "Space", "primary", GREEN),
+        ]
     elif st == "recording":
         right += [
             Button("BACKSPACE", "Cancel", "Backspace", "danger"),
@@ -555,17 +700,7 @@ def hit(btns: list[Button], x, y) -> str | None:
     return None
 
 
-def _draw_bottom_bar_chrome(cv: Canvas, btns: list[Button]) -> None:
-    """Draw segmented control tracks and the vertical separator before the primary action."""
-    groups: dict[str, list[Button]] = {}
-    for btn in btns:
-        if btn.group:
-            groups.setdefault(btn.group, []).append(btn)
-    for items in groups.values():
-        x0 = min(b.x for b in items) - _SEG_PAD
-        x1 = max(b.x + b.w for b in items) + _SEG_PAD
-        cv.rrect(x0, BAR_Y, x1 - x0, BAR_H, 12, fill=SURFACE, border=LINE, border_alpha=0.9)
-
+def _draw_primary_divider(cv: Canvas, btns: list[Button]) -> None:
     primary = next((b for b in btns if b.kind == "primary"), None)
     if primary is not None:
         left_neighbors = [b for b in btns if b.key is not None and b.x + b.w < primary.x]
@@ -573,140 +708,109 @@ def _draw_bottom_bar_chrome(cv: Canvas, btns: list[Button]) -> None:
             prev_end = max(b.x + b.w for b in left_neighbors)
             if primary.x - prev_end <= 24:
                 sx = (prev_end + primary.x) // 2
-                cv.rrect(sx, BAR_Y + 11, 1, BAR_H - 22, 1, fill=LINE, alpha=0.85)
+                cv.rrect(sx, BAR_Y + 9, 1, BAR_H - 18, 1, fill=TEXT, alpha=0.20)
 
 
 def _draw_button(cv: Canvas, btn: Button, hovered: bool) -> None:
     cy = btn.y + btn.h / 2
     if btn.kind == "label":
-        cv.text(btn.x, cy, btn.label, 12, "semibold", FAINT, "lm")
+        col = btn.colour if btn.colour != ACCENT else FAINT
+        cv.text(btn.x, cy, btn.label, 12, "semibold", col, "lm", shadow=True)
         return
 
     is_primary = btn.kind == "primary"
     is_seg = btn.kind == "seg"
     is_danger = btn.kind == "danger"
-    r = 9 if is_seg else 11
 
     if is_primary:
-        fill = _lighten(btn.colour, 0.14) if hovered else btn.colour
-        cv.rrect(btn.x, btn.y + 2, btn.w, btn.h, r, fill=SHADOW, alpha=0.6)
         cv.rrect(
             btn.x,
-            btn.y,
+            btn.y + 3,
             btn.w,
-            btn.h,
-            r,
-            fill=fill,
-            border=_lighten(btn.colour, 0.28),
-            border_alpha=0.72,
+            btn.h - 6,
+            8,
+            fill=btn.colour,
+            alpha=0.28 if hovered else 0.18,
+            border=btn.colour,
+            border_alpha=0.75 if hovered else 0.45,
         )
-        cv.rrect(btn.x + 10, btn.y + 1, btn.w - 20, 1, 1, fill=TEXT, alpha=0.28)
-        fg = TEXT
+        fg = TEXT if hovered else _lighten(btn.colour, 0.25)
     elif is_seg:
+        if hovered:
+            cv.rrect(btn.x, btn.y + 4, btn.w, btn.h - 8, 7, fill=TEXT, alpha=0.10)
         if btn.selected:
-            fill = _lighten(ACCENT, 0.12) if hovered else ACCENT
-            cv.rrect(
-                btn.x,
-                btn.y,
-                btn.w,
-                btn.h,
-                r,
-                fill=fill,
-                border=_lighten(ACCENT, 0.28),
-                border_alpha=0.7,
-            )
-            cv.rrect(btn.x + 8, btn.y + 1, btn.w - 16, 1, 1, fill=TEXT, alpha=0.24)
+            cv.rrect(btn.x + 8, btn.y + btn.h - 4, btn.w - 16, 2, 1, fill=ACCENT, alpha=0.95)
             fg = TEXT
         else:
-            if hovered:
-                cv.rrect(btn.x, btn.y, btn.w, btn.h, r, fill=RAISED, alpha=0.95)
             fg = TEXT if hovered else DIM
     elif is_danger:
-        fill = _bgr("#2b181b") if hovered else SURFACE
-        border = _bgr("#f85149") if hovered else LINE
-        cv.rrect(
-            btn.x,
-            btn.y,
-            btn.w,
-            btn.h,
-            r,
-            fill=fill,
-            border=border,
-            border_alpha=0.85 if hovered else 0.75,
-        )
-        fg = _bgr("#ff7b72") if hovered else DIM
+        if hovered:
+            cv.rrect(btn.x, btn.y + 4, btn.w, btn.h - 8, 7, fill=RED, alpha=0.18)
+        fg = RED if hovered else DIM
     else:
         if btn.selected:
-            fill = _bgr("#2b181b") if hovered else _bgr("#221518")
-            border = _bgr("#f85149")
-            cv.rrect(btn.x, btn.y, btn.w, btn.h, r, fill=fill, border=border, border_alpha=0.75)
-            fg = TEXT
-        else:
-            fill = RAISED if hovered else SURFACE
-            border = _lighten(LINE, 0.18) if hovered else LINE
             cv.rrect(
                 btn.x,
-                btn.y,
+                btn.y + 4,
                 btn.w,
-                btn.h,
-                r,
-                fill=fill,
-                border=border,
-                border_alpha=0.9 if hovered else 0.75,
+                btn.h - 8,
+                7,
+                fill=btn.colour,
+                alpha=0.22 if hovered else 0.14,
             )
-            fg = TEXT if hovered else _bgr("#c9d1d9")
+            fg = _lighten(btn.colour, 0.2)
+        else:
+            if hovered:
+                cv.rrect(btn.x, btn.y + 4, btn.w, btn.h - 8, 7, fill=TEXT, alpha=0.10)
+            fg = TEXT if hovered else DIM
 
     x = btn.x + btn.pad
-    if btn.dot:
-        cv.dot(x + 4, cy, 4, btn.dot)
-        x += 13
-    cv.text(x, cy, btn.label, *_LABEL, colour=fg, anchor="lm")
-
     if btn.cap:
-        kw = max(20.0, measure(btn.cap, *_CAP) + 12)
-        kx = btn.x + btn.w - _cap_gap(btn.pad) - kw
-        kh = 20 if is_seg else 22
-        if is_primary or (is_seg and btn.selected):
-            cv.rrect(
-                kx,
-                cy - kh / 2,
-                kw,
-                kh,
-                6,
-                fill=(0, 0, 0),
-                alpha=0.22,
-                border=TEXT,
-                border_alpha=0.22,
-            )
-            cv.text(kx + kw / 2, cy, btn.cap, *_CAP, colour=TEXT, anchor="cm", alpha=0.92)
-        else:
-            cv.rrect(
-                kx,
-                cy - kh / 2,
-                kw,
-                kh,
-                6,
-                fill=BG if not is_seg else RAISED,
-                alpha=0.85,
-                border=LINE,
-                border_alpha=0.85,
-            )
-            cv.text(kx + kw / 2, cy, btn.cap, *_CAP, colour=DIM if hovered else FAINT, anchor="cm")
-
-
-# ---------------------------------------------------------------------- parts of the picture
+        kw = max(18.0, measure(btn.cap, *_CAP) + 10)
+        kh = 19
+        cap_border = btn.colour if (is_primary or btn.selected) else TEXT
+        cv.rrect(
+            x,
+            cy - kh / 2,
+            kw,
+            kh,
+            5,
+            fill=BG,
+            alpha=0.55,
+            border=cap_border,
+            border_alpha=0.55 if (is_primary or btn.selected or hovered) else 0.25,
+        )
+        cv.text(
+            x + kw / 2,
+            cy,
+            btn.cap,
+            *_CAP,
+            colour=fg if (is_primary or btn.selected or hovered) else DIM,
+            anchor="cm",
+        )
+        x += kw + 7
+    if btn.dot:
+        cv.dot(x + 4, cy, 3.5, btn.dot)
+        x += 12
+    cv.text(x, cy, btn.label, *_LABEL, colour=fg, anchor="lm", shadow=True)
 
 
 def _stage_transform(frame_size: tuple[float, float]) -> tuple[float, int, int, int, int]:
-    """Return (scale, draw_w, draw_h, offset_x, offset_y) inside the video stage."""
+    """Return (scale, draw_w, draw_h, offset_x, offset_y) inside the video stage.
+
+    The picture fits inside the window, except that it fills the height when that cuts at most
+    MAX_SIDE_CROP of each side (a 16:9 camera on a 16:10 Mac screen); offset_x is then negative.
+    """
     fw, fh = frame_size
-    s = min(VW / fw, VH / fh)
+    sx, sy = VW / fw, VH / fh
+    s = min(sx, sy)
+    if sx < sy and (1.0 - sx / sy) / 2 <= MAX_SIDE_CROP:
+        s = sy
     dw, dh = int(round(fw * s)), int(round(fh * s))
     return s, dw, dh, (VW - dw) // 2, (VH - dh) // 2
 
 
 def _draw_framing_guide(cv: Canvas, area: np.ndarray, runner, s: float, ox: int, oy: int) -> None:
-    """Draw the mirrored start-area box and ~50% standing height line."""
     import cv2
 
     from live.start_area import default_start_area, mirror_box_x, standing_guide_lines
@@ -720,46 +824,48 @@ def _draw_framing_guide(cv: Canvas, area: np.ndarray, runner, s: float, ox: int,
     if x1 <= x0 or y1 <= y0:
         return
 
-    box_col = _bgr("#3fb950") if custom else _bgr("#58a6ff")
-    fg_col = _bgr("#3fb950") if custom else _bgr("#79c0ff")
-    cv.rrect(
-        VX + x0,
-        VY + y0,
-        x1 - x0,
-        y1 - y0,
-        8,
-        fill=box_col,
-        alpha=0.10 if custom else 0.06,
-        border=box_col,
-        border_alpha=0.88,
-        bw=2 if custom else 1,
+    col = GREEN if custom else ACCENT
+    arm = max(12, min(26, (x1 - x0) // 5, (y1 - y0) // 3))
+    corners = (
+        ((x0, y0), (x0 + arm, y0), (x0, y0 + arm)),
+        ((x1, y0), (x1 - arm, y0), (x1, y0 + arm)),
+        ((x0, y1), (x0 + arm, y1), (x0, y1 - arm)),
+        ((x1, y1), (x1 - arm, y1), (x1, y1 - arm)),
     )
+    for corner, hx, vy in corners:
+        cv2.line(area, corner, hx, col, 2, cv2.LINE_AA)
+        cv2.line(area, corner, vy, col, 2, cv2.LINE_AA)
+    for sx in range(x0 + arm + 8, x1 - arm - 4, 16):
+        cv2.line(area, (sx, y0), (min(sx + 6, x1 - arm), y0), col, 1, cv2.LINE_AA)
+        cv2.line(area, (sx, y1), (min(sx + 6, x1 - arm), y1), col, 1, cv2.LINE_AA)
+
     start_label = "Start area" if custom else "Start area (guide)"
-    sw = measure(start_label, 12, "semibold") + 20
-    cv.rrect(
+    cv.text(
         VX + x0 + 8,
-        VY + y0 + 8,
-        sw,
-        24,
+        max(VY + 84, VY + y0 - 8),
+        start_label,
         12,
-        fill=SURFACE,
-        alpha=0.84,
-        border=box_col,
-        border_alpha=0.72,
+        "semibold",
+        col,
+        "lb",
+        shadow=True,
     )
-    cv.text(VX + x0 + 18, VY + y0 + 20, start_label, 12, "semibold", fg_col, "lm")
 
     y_head, _ = standing_guide_lines((fw, fh), raw_box)
     yh = int(round(oy + y_head * s))
     if 0 <= yh < VH:
         for sx in range(x0, x1, 18):
-            cv2.line(area, (sx, yh), (min(sx + 10, x1), yh), box_col, 1, cv2.LINE_AA)
-        target_label = "Target ~50% height"
-        tw = measure(target_label, 12, "medium") + 20
-        tx = VX + 0.5 * (x0 + x1) - tw / 2
-        ty = max(VY + 78, VY + yh - 28)
-        cv.rrect(tx, ty, tw, 22, 11, fill=SURFACE, alpha=0.84, border=box_col, border_alpha=0.68)
-        cv.text(VX + 0.5 * (x0 + x1), ty + 11, target_label, 12, "medium", TEXT, "cm")
+            cv2.line(area, (sx, yh), (min(sx + 10, x1), yh), col, 1, cv2.LINE_AA)
+        cv.text(
+            VX + 0.5 * (x0 + x1),
+            max(VY + 86, VY + yh - 8),
+            "Target ~50% height",
+            12,
+            "medium",
+            col,
+            "cb",
+            shadow=True,
+        )
 
 
 def _video(cv: Canvas, runner, view: str) -> None:
@@ -773,30 +879,46 @@ def _video(cv: Canvas, runner, view: str) -> None:
         return
     if view == "camera" and runner.last_frame is not None:
         area[:] = LETTERBOX
-        area[oy : oy + dh, ox : ox + dw] = cv2.resize(
-            cv2.flip(runner.last_frame, 1), (dw, dh), interpolation=cv2.INTER_LINEAR
-        )
+        pic = cv2.resize(cv2.flip(runner.last_frame, 1), (dw, dh), interpolation=cv2.INTER_LINEAR)
+        x0, y0 = max(0, ox), max(0, oy)  # paste, cutting what falls outside the window
+        w, h = min(dw - (x0 - ox), VW - x0), min(dh - (y0 - oy), VH - y0)
+        area[y0 : y0 + h, x0 : x0 + w] = pic[y0 - oy : y0 - oy + h, x0 - ox : x0 - ox + w]
     else:
         area[:] = _backdrop()
     if runner.ctrl.state in ("readiness", "idle", "ready"):
         _draw_framing_guide(cv, area, runner, s, ox, oy)
     if runner.last_points is not None:
         pts = runner.last_points.copy()
-        pts[:, 0] = np.where(pts[:, 2] > 0, fw - pts[:, 0], 0)  # mirror for display only
+        pts[:, 0] = np.where(pts[:, 2] > 0, fw - pts[:, 0], 0)
         draw_skeleton(area, pts, s, ox, oy)
 
 
-def _chip(cv: Canvas, x_right, cy, label, colour=TEXT, fill=SURFACE, fill_alpha=0.78, dot=None):
-    """A pill ending at x_right; returns its left edge."""
-    w = 14 + (14 if dot else 0) + measure(label, 13, "medium") + 14
+def _hud_item(
+    cv: Canvas,
+    x_right: float,
+    cy: float,
+    label: str,
+    colour=TEXT,
+    dot=None,
+    size: int = 13,
+    weight: str = "semibold",
+) -> float:
+    w = measure(label, size, weight) + (13 if dot else 0)
     x = x_right - w
-    cv.rrect(x, cy - 15, w, 30, 15, fill=fill, alpha=fill_alpha, border=LINE, border_alpha=0.8)
-    tx = x + 14
+    tx = x
     if dot:
         cv.dot(tx + 4, cy, 4, dot)
-        tx += 14
-    cv.text(tx, cy, label, 13, "medium", colour, "lm")
+        tx += 13
+    cv.text(tx, cy, label, size, weight, colour, "lm", shadow=True)
     return x
+
+
+def _fps_colour(fps: float) -> tuple[int, int, int]:
+    if fps >= 20.0:
+        return GREEN
+    if fps >= 15.0:
+        return AMBER
+    return RED
 
 
 def _recording_seconds(runner) -> float:
@@ -808,58 +930,69 @@ def _recording_seconds(runner) -> float:
 
 def _top_bar(cv: Canvas, runner) -> None:
     c = runner.ctrl
-    cv.fade(VX, VY, VW, 132, BG, 0.85, 0.0)
-    x0, cy = VX + 24, VY + 36
-    w_title = cv.text(x0, cy, "Gross Motor Screening", 19, "semibold", TEXT, "lm")
-    cv.text(x0, cy + 23, "Screening aid · not a diagnosis", 13, "regular", DIM, "lm")
-    limit = x0 + max(w_title, measure("Screening aid · not a diagnosis", 13)) + 24
+    cv.fade(VX, VY, VW, 110, BG, 0.88, 0.0)
+    x0, cy = VX + PAD, VY + 26
+    w_title = cv.text(x0, cy, "Gross Motor Screening", 17, "semibold", TEXT, "lm", shadow=True)
+    cv.text(x0, cy + 21, "Screening aid · not a diagnosis", 12, "regular", DIM, "lm", shadow=True)
+    limit = x0 + max(w_title, measure("Screening aid · not a diagnosis", 12)) + 24
 
-    colour = STATE_COLOURS.get(c.state, DIM)
-    name = STATE_NAMES.get(c.state, c.state)
-    if c.state == "recording":
-        name = f"{name}  {_recording_seconds(runner):4.1f} s"
-    pulse = c.state != "recording" or (time.monotonic() % 1.0) < 0.6
-    dot_col = colour if pulse else (TEXT if c.state == "recording" else FAINT)
-    x = _chip(cv, VX + VW - 20, cy, name, TEXT, colour, 0.28, dot_col)
+    paused = c.state == "idle" and bool(getattr(c, "paused", False))
+    if paused:
+        colour, name = AMBER, "Gesture paused" if c.mode == "gesture" else "Auto paused"
+        dot_col = AMBER
+    else:
+        colour = STATE_COLOURS.get(c.state, DIM)
+        name = STATE_NAMES.get(c.state, c.state)
+        if c.state == "recording":
+            name = f"{name}  {_recording_seconds(runner):4.1f} s"
+        pulse = c.state != "recording" or (time.monotonic() % 1.0) < 0.6
+        dot_col = colour if pulse else TEXT
 
-    chips = []
+    x = _hud_item(cv, VX + VW - PAD, cy, name, colour, dot=dot_col, size=14, weight="semibold")
+
+    items: list[tuple[str, tuple[int, int, int], tuple[int, int, int] | None, str]] = []
+    if c.state != "recording":
+        fps = runner.fps() if hasattr(runner, "fps") else 0.0
+        mode = MODE_NAMES.get(c.mode, c.mode)
+        if fps > 0:
+            items.append((f"{fps:.0f} fps", _fps_colour(fps), None, "semibold"))
+        items.append((mode, DIM if c.mode == "manual" else ACCENT, None, "medium"))
     if c.state != "setup":
         from live.quality import feet_visible
 
         feet_ok = feet_visible(getattr(runner, "last_points", None), runner.frame_size)
         if feet_ok:
-            chips.append(("Both feet visible", _bgr("#3fb950"), _bgr("#3fb950")))
+            items.append(("Both feet visible", GREEN, GREEN, "semibold"))
         else:
-            chips.append(("Feet not visible", _bgr("#f85149"), RED))
+            items.append(("Feet not visible", RED, RED, "semibold"))
     if c.child:
-        chips.append((f"{c.child} · {c.age} months · consent {c.consent}", TEXT, None))
-        if c.state != "recording":
-            chips.append((f"{c.tries_saved} saved", DIM, None))
+        if c.video:
+            items.append(("Video on", RED, RED, "semibold"))
         if not age_in_range(c.age):
             lo, hi = AGE_RANGE_MONTHS
-            chips.append((f"Outside {lo}–{hi} months", _bgr("#e3b341"), AMBER))
-        if c.video:
-            chips.append(("Video on", TEXT, RED))
-    if c.state != "recording":
-        fps = runner.fps() if hasattr(runner, "fps") else 0.0
-        mode = "Auto" if c.mode == "auto" else "Manual"
-        chips.append((f"{mode} · {fps:.0f} fps" if fps else mode, DIM, None))
-    for label, fg, dot in chips:
-        w = 14 + (14 if dot else 0) + measure(label, 13, "medium") + 14
-        if x - 8 - w < limit:
+            items.append((f"Outside {lo}–{hi} months", AMBER, AMBER, "semibold"))
+        if c.state != "recording":
+            items.append((f"{c.tries_saved} saved", DIM, None, "medium"))
+        items.append((f"{c.child} · {c.age} months · consent {c.consent}", TEXT, None, "medium"))
+
+    for label, fg, dot, weight in items:
+        w = measure(label, 13, weight) + (13 if dot else 0)
+        if x - 20 - w < limit:
             break
-        x = _chip(cv, x - 8, cy, label, fg, dot=dot)
+        cv.text(x - 10, cy, "·", 13, "semibold", FAINT, "cm", shadow=True)
+        x = _hud_item(cv, x - 20, cy, label, fg, dot=dot, size=13, weight=weight)
 
 
-def _card(cv: Canvas, x, y, w, h, alpha=0.9):
-    cv.rrect(x, y, w, h, 14, fill=SURFACE, alpha=alpha, border=LINE)
+def _panel(cv: Canvas, x, y, w, h, alpha=0.90):
+    cv.rrect(x + 2, y + 6, w, h, 14, fill=SHADOW, alpha=0.45)
+    cv.rrect(x, y, w, h, 14, fill=SURFACE, alpha=alpha, border=LINE, border_alpha=0.85)
 
 
 def _setup_field_boxes(c) -> tuple[int, int, int, int, list[tuple[int, int, int, int]], list[str]]:
     w = 500
     msg_lines = wrap(c.message, 14, "regular", w - 56, 2)
     h = 28 + 34 + 26 + 18 + 3 * 82 + len(msg_lines) * 20 + 24
-    x, y = VX + (VW - w) // 2, VY + (VH - h) // 2 + 20
+    x, y = VX + (VW - w) // 2, VY + (VH - h) // 2
     cx = x + 28
     yy = y + 28 + 38 + 36
     bw = w - 56
@@ -886,7 +1019,7 @@ def _setup_card(cv: Canvas, c) -> None:
     lo, hi = AGE_RANGE_MONTHS
     hints = ("e.g. K03", f"{lo}–{hi}", "1 points only · 2 stick figure · 3 + video")
     x, y, w, h, boxes, msg_lines = _setup_field_boxes(c)
-    _card(cv, x, y, w, h, 0.96)
+    _panel(cv, x, y, w, h, 0.94)
     cx = x + 28
     yy = y + 28
     cv.text(cx, yy, "New child", 26, "semibold", TEXT)
@@ -932,36 +1065,35 @@ def _setup_card(cv: Canvas, c) -> None:
         yy = by + bh + 14
     error = c.message and not c.message.startswith(("Type", "Next child"))
     for line in msg_lines:
-        cv.text(cx, yy, line, 14, "regular", _bgr("#e3b341") if error else DIM)
+        cv.text(cx, yy, line, 14, "regular", AMBER if error else DIM)
         yy += 20
 
 
 def _icon_ok(cv: Canvas, cx, cy):
     import cv2
 
-    cv.dot(cx, cy, 10, _bgr("#3fb950"))
-    pts = np.array([[cx - 5, cy], [cx - 1.5, cy + 4], [cx + 5, cy - 4]]) * 4
+    cv.dot(cx, cy, 9, GREEN)
+    pts = np.array([[cx - 4.5, cy], [cx - 1.2, cy + 3.5], [cx + 4.5, cy - 3.5]]) * 4
     cv2.polylines(cv.img, [pts.astype(np.int32)], False, BG, 2, cv2.LINE_AA, 2)
 
 
 def _icon_warn(cv: Canvas, cx, cy):
-    cv.dot(cx, cy, 10, AMBER)
-    cv.text(cx, cy, "!", 14, "bold", BG, "cm")
+    cv.dot(cx, cy, 9, AMBER)
+    cv.text(cx, cy, "!", 13, "bold", BG, "cm")
 
 
-def _readiness_card(cv: Canvas, runner) -> None:
+def _readiness_overlay(cv: Canvas, runner) -> None:
     c = runner.ctrl
     custom = getattr(runner, "start_area", None) is not None
-    w = 470
-    rows = []
-    for p in c.problems:
-        rows.append(wrap(p, 15, "regular", w - 90, 3))
-    foot = (
-        "Press Start (Enter) when the child is at the start line."
-        if not c.problems
-        else "You can start anyway with Start (Enter)."
-    )
-    foot_lines = wrap(foot, 14, "regular", w - 56)
+    w = 460
+    rows = [wrap(p, 15, "regular", w - 40, 3) for p in c.problems]
+    if c.mode == "gesture":
+        foot = "Show an open hand to the camera (or press Start, Enter) to start."
+    elif not c.problems:
+        foot = "Press Start (Enter) when the child is at the start line."
+    else:
+        foot = "You can start anyway with Start (Enter)."
+    foot_lines = wrap(foot, 14, "regular", w)
     tip_lines = (
         []
         if custom
@@ -969,35 +1101,36 @@ def _readiness_card(cv: Canvas, runner) -> None:
             "Tip: run 'python -m live.start_area' to calibrate the taped floor box.",
             12,
             "regular",
-            w - 56,
+            w,
         )
     )
-    body_h = 30 if not rows else sum(len(r) * 21 + 10 for r in rows)
-    tip_h = (6 + len(tip_lines) * 18) if tip_lines else 0
-    h = 24 + 30 + 16 + body_h + 8 + len(foot_lines) * 20 + tip_h + 22
-    x, y = VX + 24, VY + 96
-    _card(cv, x, y, w, h)
-    cx, yy = x + 24, y + 24
-    cv.text(cx, yy, "Readiness check", 20, "semibold", TEXT)
-    yy += 46
+    body_h = 28 if not rows else sum(len(r) * 21 + 10 for r in rows)
+    total_h = 34 + 14 + body_h + 12 + len(foot_lines) * 20 + (len(tip_lines) * 18 + 8)
+    cv.fade_x(0, 48, w + 160, min(H - 96, total_h + 112), BG, 0.84, 0.0, v_feather=64)
+
+    cx, yy = VX + PAD, VY + 92
+    cv.text(cx, yy, "Readiness check", 21, "semibold", TEXT, shadow=True)
+    yy += 38
     if not rows:
-        _icon_ok(cv, cx + 10, yy + 10)
-        cv.text(cx + 32, yy + 10, "Camera and child look ready.", 15, "regular", TEXT, "lm")
+        _icon_ok(cv, cx + 9, yy + 9)
+        cv.text(
+            cx + 28, yy + 9, "Camera and child look ready.", 15, "medium", GREEN, "lm", shadow=True
+        )
         yy += 30
     for lines in rows:
-        _icon_warn(cv, cx + 10, yy + 10)
+        _icon_warn(cv, cx + 9, yy + 9)
         for line in lines:
-            cv.text(cx + 32, yy + 10, line, 15, "regular", TEXT, "lm")
+            cv.text(cx + 28, yy + 9, line, 15, "regular", TEXT, "lm", shadow=True)
             yy += 21
         yy += 10
-    yy += 8
+    yy += 6
     for line in foot_lines:
-        cv.text(cx, yy, line, 14, "regular", DIM)
+        cv.text(cx, yy, line, 14, "medium", DIM, shadow=True)
         yy += 20
     if tip_lines:
         yy += 6
         for line in tip_lines:
-            cv.text(cx, yy, line, 12, "regular", FAINT)
+            cv.text(cx, yy, line, 12, "regular", FAINT, shadow=True)
             yy += 18
 
 
@@ -1014,8 +1147,8 @@ def _confirm_card(cv: Canvas, c) -> None:
     ct, cl = c.choice_task, c.choice_leg
     corrected = ct != gt or (ct != 3 and cl != gl)
     w, h = 520, 268
-    x, y = VX + (VW - w) // 2, VY + (VH - h) // 2 + 20
-    _card(cv, x, y, w, h, 0.96)
+    x, y = VX + (VW - w) // 2, VY + (VH - h) // 2
+    _panel(cv, x, y, w, h, 0.94)
     cx, yy = x + 28, y + 28
     cv.text(cx, yy, "Check this try", 24, "semibold", TEXT)
     yy += 36
@@ -1028,7 +1161,7 @@ def _confirm_card(cv: Canvas, c) -> None:
     yy += 40
     cv.text(cx, yy, "Will be saved as", 13, "medium", DIM)
     if corrected:
-        cv.text(x + w - 28, yy, "Corrected", 13, "semibold", _bgr("#e3b341"), "rt")
+        cv.text(x + w - 28, yy, "Corrected", 13, "semibold", AMBER, "rt")
     yy += 22
     cv.text(cx, yy, _task_leg(ct, cl), 20, "semibold", TEXT)
     yy += 44
@@ -1039,15 +1172,11 @@ def _confirm_card(cv: Canvas, c) -> None:
 def _toast(cv: Canvas, message: str) -> None:
     if not message:
         return
-    lines = wrap(message, 15, "regular", 760, 3)
-    w = max(measure(t, 15) for t in lines) + 40
-    h = len(lines) * 22 + 22
-    x, y = VX + (VW - w) / 2, VY + VH - 20 - h
-    cv.rrect(x, y, w, h, 12, fill=SURFACE, alpha=0.9, border=LINE)
-    yy = y + 11
+    lines = wrap(message, 14, "medium", 820, 2)
+    yy = BAR_Y - 12 - (len(lines) - 1) * 20
     for line in lines:
-        cv.text(VX + VW / 2, yy, line, 15, "regular", TEXT, "ct")
-        yy += 22
+        cv.text(VX + VW / 2, yy, line, 14, "medium", TEXT, "cb", shadow=True)
+        yy += 20
 
 
 _BADGE_POS: weakref.WeakKeyDictionary[object, tuple[float, float]] = weakref.WeakKeyDictionary()
@@ -1079,7 +1208,7 @@ def _shoulder_anchor(runner) -> tuple[tuple[float, float], tuple[float, float], 
 
 
 def _draw_floating_score_badge(cv: Canvas, runner, live: dict) -> bool:
-    """Draw a sleek 3D-feel score badge anchored beside the person's shoulder (show_score only)."""
+    """Lightweight floating shoulder score callout (show_score only)."""
     import cv2
 
     anchor = _shoulder_anchor(runner)
@@ -1095,16 +1224,16 @@ def _draw_floating_score_badge(cv: Canvas, runner, live: dict) -> bool:
     mode_tag = "Live" if is_rec else "Preview"
     sub = f"{mode_tag} · {conf:.0%} · {TASK_SHORT.get(task, '')}"
 
-    text_w = max(measure(label, 20, "semibold"), measure(sub, 11, "medium"))
-    bw = int(max(166, 16 + 34 + 12 + text_w + 18))
-    bh = 56
-    stem_dx = int(min(46, max(24, span * 0.28)))
-    stem_dy = 22
+    text_w = max(measure(label, 19, "semibold"), measure(sub, 11, "medium"))
+    bw = int(max(156, 14 + 30 + 12 + text_w + 16))
+    bh = 50
+    stem_dx = int(min(44, max(22, span * 0.26)))
+    stem_dy = 20
 
-    right_edge, left_edge = VX + VW - 16, VX + 16
+    right_edge, left_edge = VX + VW - PAD, VX + PAD
     if getattr(runner, "result", None) and runner.ctrl.state in ("idle", "ready"):
-        right_edge = VX + VW - 24 - CARD_W - 14
-    top_edge, bot_edge = VY + 86, VY + VH - 16
+        right_edge = VX + VW - PAD - CARD_W - 14
+    top_edge, bot_edge = VY + 84, BAR_Y - 18
     go_right = right_sh[0] + stem_dx + 14 + bw <= right_edge
     ax, ay = right_sh if go_right else left_sh
     tx = (ax + stem_dx + 14) if go_right else (ax - stem_dx - 14 - bw)
@@ -1124,197 +1253,420 @@ def _draw_floating_score_badge(cv: Canvas, runner, live: dict) -> bool:
     attach_x = int(round(bx)) if go_right else int(round(bx + bw))
     cv2.line(cv.img, (int(round(ax)), int(round(ay))), (elbow_x, elbow_y), col, 2, cv2.LINE_AA)
     cv2.line(cv.img, (elbow_x, elbow_y), (attach_x, elbow_y), col, 2, cv2.LINE_AA)
-    cv.rrect(ax - 10, ay - 10, 20, 20, 10, fill=col, alpha=0.28)
-    cv.dot(ax, ay, 5, col)
+    cv.dot(ax, ay, 4.5, col)
     cv.dot(ax, ay, 2, TEXT)
 
-    cv.rrect(bx + 3, by + 6, bw, bh, 16, fill=SHADOW, alpha=0.55)
-    cv.rrect(
-        bx,
-        by,
-        bw,
-        bh,
-        16,
-        fill=SURFACE,
-        alpha=0.90 if is_rec else 0.84,
-        border=col,
-        border_alpha=0.95 if is_rec else 0.78,
-        bw=2,
-    )
-    cv.rrect(bx + 14, by + 2, bw - 28, 2, 1, fill=TEXT, alpha=0.18)
-
     cy = by + bh / 2
-    cv.dot(bx + 29, cy, 17, col)
-    cv.text(bx + 29, cy, str(sc), 19, "bold", BG, "cm")
-    cv.text(bx + 56, by + 20, label, 20, "semibold", col, "lm")
-    cv.text(bx + 56, by + 41, sub, 11, "medium", DIM, "lm")
+    cv.dot(bx + 26, cy, 15, col)
+    cv.text(bx + 26, cy, str(sc), 18, "bold", BG, "cm")
+    cv.text(bx + 50, by + 18, label, 19, "semibold", col, "lm", glow=0.9)
+    cv.text(bx + 50, by + 37, sub, 11, "medium", TEXT, "lm", glow=0.9)
     return True
 
 
-def _score_cards(cv: Canvas, runner, view: str = "camera") -> None:
-    """Live score and last saved try (show_score only). Reference only, never a diagnosis."""
-    c = runner.ctrl
-    if c.state in ("setup", "readiness"):
-        return
-    x, y, w = VX + VW - 24 - CARD_W, VY + 96, CARD_W
-    if c.state == "recording" and getattr(runner, "auto_flow", False):
-        _detect_chip(cv, getattr(runner, "detect", None), c.preset_task)
-    live = getattr(runner, "live", None)
-    anchored = False
-    if c.state != "confirm" and view != "neutral" and live and "score" in live:
-        anchored = _draw_floating_score_badge(cv, runner, live)
-    if not anchored:
-        y = _live_card(cv, live, x, y, w) + 12
-    result = getattr(runner, "result", None)
-    if result and c.state in ("idle", "ready"):
-        _result_card(cv, result, x, y, w)
-
-
-def _detect_label(detect: dict | None, preset_task: int | None) -> str:
-    """'Detecting: hop on one leg · 92%' while a try runs (demo + auto mode only)."""
+def _detect_label(
+    detect: dict | None, preset_task: int | None, preset_leg: str | None = None
+) -> str:
+    """'Detecting: hop on one leg · 92%' or pinned task label while a try runs."""
     if preset_task:
-        return f"Task set by key: {b.TASKS[preset_task]}"
+        base = f"Task set by key: {b.TASKS[preset_task]}"
+        if preset_leg and preset_task != 3:
+            return f"{base} · leg {preset_leg}"
+        return base
     if not detect:
         return "Detecting…"
     return f"Detecting: {b.TASKS[int(detect['task'])]} · {float(detect['confidence']):.0%}"
 
 
-def _detect_chip(cv: Canvas, detect: dict | None, preset_task: int | None) -> None:
-    """The detected task on the left, under the title (show_score + auto mode only)."""
-    label = _detect_label(detect, preset_task)
-    w = 14 + 14 + measure(label, 13, "medium") + 14
-    _chip(cv, VX + 24 + w, VY + 104, label, TEXT, dot=AMBER if preset_task else ACCENT)
+def _detect_hud(cv: Canvas, detect: dict | None, preset_task: int | None, preset_leg: str | None):
+    label = _detect_label(detect, preset_task, preset_leg)
+    col = AMBER if preset_task else ACCENT
+    cv.dot(VX + PAD + 4, VY + 74, 4, col)
+    cv.text(VX + PAD + 16, VY + 74, label, 13, "semibold", col, "lm", shadow=True)
 
 
-def _live_card(cv: Canvas, live, x, y, w) -> int:
-    inner = w - 40
+def _score_hud(cv: Canvas, runner, view: str = "camera") -> None:
+    c = runner.ctrl
+    if c.state in ("setup", "readiness", "confirm"):
+        return
+    if getattr(runner, "gesture_flow", False):
+        _gesture_hud(cv, runner, view)
+        return
+    if c.state == "recording" and getattr(runner, "auto_flow", False):
+        _detect_hud(cv, getattr(runner, "detect", None), c.preset_task, c.preset_leg)
+    elif (
+        c.state in ("idle", "ready")
+        and getattr(runner, "auto_flow", False)
+        and c.preset_task is not None
+    ):
+        _detect_hud(cv, None, c.preset_task, c.preset_leg)
+
+    live = getattr(runner, "live", None)
+    anchored = False
+    if view != "neutral" and live and "score" in live:
+        anchored = _draw_floating_score_badge(cv, runner, live)
+
+    result = getattr(runner, "result", None)
+    show_result = bool(result and c.state in ("idle", "ready"))
+    show_live_col = not anchored
+    if not show_live_col and not show_result:
+        return
+
+    w = CARD_W
+    x = VX + VW - PAD - w
+    cv.fade_x(x - 140, 48, w + PAD + 140, H - 96, BG, 0.0, 0.86, v_feather=64)
+    y = VY + 92
+    if show_live_col:
+        y = _live_text(cv, live, x, y, w)
+        if show_result:
+            cv.rrect(x, y + 6, w, 1, 0, fill=TEXT, alpha=0.16)
+            y += 20
+    if show_result:
+        _result_text(cv, result, x, y, w)
+
+
+def _live_text(cv: Canvas, live, x, y, w) -> int:
     if live and "hint" in live:
         task = live.get("task")
-        detail_lines = wrap(live.get("detail", ""), 13, "regular", inner, 3)
-        h = 18 + 18 + 12 + 24 + len(detail_lines) * 18 + 16
-        _card(cv, x, y, w, h)
-        cx, yy = x + 20, y + 18
-        cv.text(cx, yy, "READY TO RECORD", 12, "semibold", DIM)
+        detail_lines = wrap(live.get("detail", ""), 13, "regular", w, 3)
+        cv.text(x, y, "READY TO RECORD", 11, "semibold", ACCENT, shadow=True)
         if task:
             cv.text(
-                x + w - 20,
-                yy,
+                x + w,
+                y,
                 f"Task {int(task)} · {TASK_SHORT.get(int(task), '')}",
-                12,
+                11,
                 "semibold",
                 DIM,
                 "rt",
+                shadow=True,
             )
-        yy += 30
-        cv.text(cx, yy, live["hint"], 17, "semibold", TEXT)
-        yy += 26
+        y += 22
+        cv.text(x, y, live["hint"], 18, "semibold", TEXT, shadow=True)
+        y += 26
         for line in detail_lines:
-            cv.text(cx, yy, line, 13, "regular", DIM)
-            yy += 18
-        return y + h
+            cv.text(x, y, line, 13, "regular", DIM, shadow=True)
+            y += 18
+        return y + 8
+
     if not live or "error" in live:
         detail = (
             live["error"] if live else "The score appears after about 1 s of the child in view."
         )
-        lines = wrap(detail, 13, "regular", inner, 3)
-        h = 20 + 18 + 14 + 24 + len(lines) * 18 + 18
-        _card(cv, x, y, w, h)
-        cx, yy = x + 20, y + 20
-        cv.text(cx, yy, "LIVE SCORE", 12, "semibold", DIM)
-        yy += 32
-        cv.text(cx, yy, "Waiting for a clear view", 17, "semibold", TEXT)
-        yy += 30
+        lines = wrap(detail, 13, "regular", w, 3)
+        cv.text(x, y, "LIVE SCORE", 11, "semibold", DIM, shadow=True)
+        y += 22
+        cv.text(x, y, "Waiting for a clear view", 17, "semibold", TEXT, shadow=True)
+        y += 26
         for line in lines:
-            cv.text(cx, yy, line, 13, "regular", DIM)
-            yy += 18
-        return y + h
+            cv.text(x, y, line, 13, "regular", DIM, shadow=True)
+            y += 18
+        return y + 8
+
     sc = int(live["score"])
     task = int(live.get("task") or 1)
     conf = float(live.get("confidence") or 0.0)
     col = SCORE_COLOURS[sc]
-    reasons = wrap(live.get("reasons", ""), 13, "regular", inner, 3)
-    h = 20 + 18 + 16 + 64 + 14 + 6 + 16 + len(reasons) * 18 + 18
-    _card(cv, x, y, w, h)
-    cx, yy = x + 20, y + 20
-    cv.text(cx, yy, "LIVE SCORE", 12, "semibold", DIM)
-    cv.text(x + w - 20, yy, f"Task {task} · {TASK_SHORT.get(task, '')}", 12, "semibold", DIM, "rt")
-    yy += 34
-    cv.dot(cx + 30, yy + 30, 30, col)
-    cv.text(cx + 30, yy + 30, str(sc), 32, "bold", BG, "cm")
-    cv.text(cx + 76, yy + 20, SCORE_NAMES[sc], 28, "semibold", col, "lm")
-    cv.text(cx + 76, yy + 48, f"{conf:.0%} sure", 14, "regular", DIM, "lm")
-    yy += 64 + 14
-    cv.rrect(cx, yy, inner, 6, 3, fill=RAISED)
+    reasons = wrap(live.get("reasons", ""), 13, "regular", w, 3)
+    cv.text(x, y, "LIVE SCORE", 11, "semibold", DIM, shadow=True)
+    cv.text(
+        x + w,
+        y,
+        f"Task {task} · {TASK_SHORT.get(task, '')}",
+        11,
+        "semibold",
+        DIM,
+        "rt",
+        shadow=True,
+    )
+    y += 24
+    num_w = cv.text(x, y, str(sc), 34, "bold", col, "lt", shadow=True)
+    cv.text(x + num_w + 12, y + 3, SCORE_NAMES[sc], 24, "semibold", col, "lt", shadow=True)
+    cv.text(x + num_w + 12, y + 31, f"{conf:.0%} sure", 13, "medium", DIM, "lt", shadow=True)
+    y += 52
+    cv.rrect(x, y, w, 3, 2, fill=TEXT, alpha=0.18)
     if conf > 0:
-        cv.rrect(cx, yy, max(6, inner * min(conf, 1.0)), 6, 3, fill=col)
-    yy += 6 + 16
+        cv.rrect(x, y, max(6, w * min(conf, 1.0)), 3, 2, fill=col)
+    y += 14
     for line in reasons:
-        cv.text(cx, yy, line, 13, "regular", DIM)
-        yy += 18
-    return y + h
+        cv.text(x, y, line, 13, "regular", DIM, shadow=True)
+        y += 18
+    return y + 8
 
 
-def _result_card(cv: Canvas, r: dict, x, y, w) -> None:
-    inner = w - 40
+def _result_text(cv: Canvas, r: dict, x, y, w) -> None:
     check = r.get("check") or r.get("score") is None
-    reasons = wrap(r.get("reasons", ""), 13, "regular", inner, 3)
+    reasons = wrap(r.get("reasons", ""), 13, "regular", w, 3)
     head = _task_leg(r["task"], r["leg"])
     if check:
-        words = wrap("Model is unsure: check by teacher.", 15, "regular", inner, 2)
-        col, chip = PURPLE, "Check by teacher"
+        words = wrap("Model is unsure: check by teacher.", 14, "regular", w, 2)
+        col, verdict = PURPLE, "Check by teacher"
     else:
         s = int(r["score"])
-        words = wrap(SCORE_WORDS[s].capitalize() + ".", 15, "regular", inner, 2)
-        col, chip = SCORE_COLOURS[s], f"{s} · {SCORE_NAMES[s]}"
-    auto = r.get("auto")  # saved without the confirm card (app.demo, conf >= AUTO_ACCEPT)
-    detected = (
-        f"Task detected: {b.TASKS[int(auto['task'])]} · {float(auto['confidence']):.0%}"
-        if auto
-        else ""
-    )
-    h = 20 + 18 + 12 + 22 + 12 + 30 + 12 + len(words) * 21 + 6 + len(reasons) * 18 + 10 + 18 + 18
-    h += 22 if auto else 0
-    _card(cv, x, y, w, h)
-    cx, yy = x + 20, y + 20
-    cv.text(cx, yy, "LAST SAVED TRY", 12, "semibold", DIM)
+        words = wrap(SCORE_WORDS[s].capitalize() + ".", 14, "regular", w, 2)
+        col, verdict = SCORE_COLOURS[s], f"{s} · {SCORE_NAMES[s]}"
+
+    auto = r.get("auto")
+    pinned = r.get("pinned")
+    cv.text(x, y, "LAST SAVED TRY", 11, "semibold", DIM, shadow=True)
     if r.get("try"):
-        cv.text(x + w - 20, yy, f"Try #{int(r['try'])}", 12, "semibold", DIM, "rt")
-    yy += 30
+        cv.text(x + w, y, f"Try #{int(r['try'])}", 11, "semibold", DIM, "rt", shadow=True)
+    y += 22
     if auto:
-        cv.text(cx, yy, detected, 13, "medium", _bgr("#79c0ff"))
-        yy += 22
-    cv.text(cx, yy, head, 15, "medium", TEXT)
-    yy += 34
-    cw = measure(chip, 14, "semibold") + 28
-    cv.rrect(cx, yy, cw, 30, 15, fill=col, alpha=0.22, border=col, border_alpha=0.7)
-    cv.text(cx + 14, yy + 15, chip, 14, "semibold", col, "lm")
+        detected = f"Task detected: {b.TASKS[int(auto['task'])]} · {float(auto['confidence']):.0%}"
+        cv.text(x, y, detected, 13, "medium", ACCENT, shadow=True)
+        y += 20
+    elif pinned:
+        cv.text(x, y, "Task prioritized by key", 13, "medium", AMBER, shadow=True)
+        y += 20
+    cv.text(x, y, head, 15, "medium", TEXT, shadow=True)
+    y += 26
+    vw = cv.text(x, y, verdict, 22, "semibold", col, "lt", shadow=True)
     if not check:
         cv.text(
-            cx + cw + 12,
-            yy + 15,
+            x + vw + 10,
+            y + 13,
             f"{float(r.get('confidence') or 0):.0%} sure",
             13,
-            "regular",
+            "medium",
             DIM,
             "lm",
+            shadow=True,
         )
-    yy += 42
+    y += 34
     for line in words:
-        cv.text(cx, yy, line, 15, "regular", TEXT)
-        yy += 21
-    yy += 6
+        cv.text(x, y, line, 14, "regular", TEXT, shadow=True)
+        y += 20
+    y += 4
     for line in reasons:
-        cv.text(cx, yy, line, 13, "regular", DIM)
-        yy += 18
-    yy += 10
-    cv.text(cx, yy, "Reference only, not a diagnosis.", 12, "regular", FAINT)
+        cv.text(x, y, line, 13, "regular", DIM, shadow=True)
+        y += 18
+    y += 8
+    cv.text(x, y, "Reference only, not a diagnosis.", 11, "regular", FAINT, shadow=True)
 
 
-# ---------------------------------------------------------------------- the whole picture
+# ---------------------------------------------------------------------- gesture flow
+
+
+def _to_canvas(runner, x: float, y: float) -> tuple[float, float]:
+    """Unmirrored frame pixel -> mirrored window pixel."""
+    fw, _fh = runner.frame_size
+    s, _dw, _dh, ox, oy = _stage_transform(runner.frame_size)
+    return VX + ox + (fw - x) * s, VY + oy + y * s
+
+
+def _arc(cv: Canvas, cx, cy, r, frac: float, colour, thickness: int = 4) -> None:
+    """Clockwise arc from 12 o'clock covering frac (0..1) of a circle."""
+    import cv2
+
+    if frac <= 0:
+        return
+    c = (int(round(cx * 4)), int(round(cy * 4)))
+    ax = (int(round(r * 4)), int(round(r * 4)))
+    cv2.ellipse(cv.img, c, ax, -90, 0, 360 * min(frac, 1.0), colour, thickness, cv2.LINE_AA, 2)
+
+
+def _gesture_ring(cv: Canvas, runner) -> None:
+    """A ring on the raised hand (palm) or the crossed arms (X) that fills while it is held."""
+    import cv2
+
+    g = getattr(runner, "gesture", None)
+    if g is None or g.kind is None or g.anchor is None:
+        return
+    if runner.ctrl.state not in ("readiness", "idle", "ready", "recording"):
+        return
+    x, y = _to_canvas(runner, *g.anchor)
+    col = GREEN if g.kind == "palm" else RED
+    c4 = (int(round(x * 4)), int(round(y * 4)))
+    cv2.circle(cv.img, c4, 30 * 4, SHADOW, 6, cv2.LINE_AA, 2)
+    cv2.circle(cv.img, c4, 30 * 4, TEXT if not g.waiting_for_open else AMBER, 2, cv2.LINE_AA, 2)
+    _arc(cv, x, y, 30, g.progress, col, 5)
+    label = g.hint
+    cv.text(
+        x, y + 46, label, 13, "semibold", AMBER if g.waiting_for_open else TEXT, "ct", shadow=True
+    )
+
+
+def _countdown_overlay(cv: Canvas, runner) -> None:
+    """Big 3-2-1 in the middle of the window, with a ring that empties each second."""
+    left = runner.countdown_left() if hasattr(runner, "countdown_left") else None
+    if left is None:
+        return
+    n = max(1, min(3, math.ceil(left - 1e-6))) if left > 0 else 1
+    frac = left - (n - 1)
+    cx, cy, r = VX + VW / 2, VY + VH / 2 - 20, 132
+    cv.rrect(cx - r - 10, cy - r - 10, 2 * r + 20, 2 * r + 20, r + 10, fill=BG, alpha=0.62)
+    import cv2
+
+    cv2.circle(
+        cv.img,
+        (int(cx * 4), int(cy * 4)),
+        int(r * 4),
+        _lighten(BG, 0.25),
+        6,
+        cv2.LINE_AA,
+        2,
+    )
+    _arc(cv, cx, cy, r, frac, AMBER, 8)
+    cv.text(cx, cy, str(n), 190, "bold", TEXT, "cm", shadow=True)
+    cv.text(cx, cy + r + 34, "Get ready", 24, "semibold", AMBER, "ct", shadow=True)
+    cv.text(
+        cx,
+        cy + r + 68,
+        "Recording starts at 0 · Backspace cancels",
+        14,
+        "regular",
+        DIM,
+        "ct",
+        shadow=True,
+    )
+
+
+def _verdict(r: dict) -> tuple[str, tuple[int, int, int]]:
+    if r.get("check") or r.get("score") is None:
+        return "Check by teacher", PURPLE
+    sc = int(r["score"])
+    return f"{sc} {SCORE_NAMES[sc]}", SCORE_COLOURS[sc]
+
+
+def _fade(runner, item: dict, t_in: float = 0.25, t_out: float = 0.45) -> float:
+    """0..1: how much of a timed overlay ({"since", "until"} in stream seconds) to show now."""
+    now = getattr(runner, "now", None)
+    if now is None or "until" not in item:
+        return 1.0
+    a = (item["until"] - now) / t_out
+    if "since" in item:
+        a = min(a, (now - item["since"]) / t_in)
+    return float(min(max(a, 0.0), 1.0))
+
+
+def _score_words(r: dict) -> tuple[str, str, tuple[int, int, int]]:
+    """(big word, small line, colour) of one attempt: "Perfect" / "Score 2 · 83% sure"."""
+    if r.get("check") or r.get("score") is None:
+        return "Check by teacher", "The model is unsure", PURPLE
+    sc = int(r["score"])
+    return (
+        SCORE_NAMES[sc],
+        f"Score {sc} · {float(r.get('confidence') or 0):.0%} sure",
+        SCORE_COLOURS[sc],
+    )
+
+
+def _attempt_moment(cv: Canvas, r: dict, a: float) -> None:
+    """The attempt that just ended, in large type at the top middle (no box)."""
+    if a <= 0:
+        return
+    task = int(r["task"])
+    word, small, col = _score_words(r)
+    cx = VX + VW / 2
+    big = 64 if len(word) < 10 else 46
+    head = f"TASK {task} · {b.TASKS[task].upper()}"
+    detail = f"{r.get('headline', '')}  ·  {small}"
+    cv.text(cx, VY + 102, head, 13, "semibold", TEXT, "cm", alpha=a, glow=0.9)
+    cv.text(cx, VY + 162, word, big, "bold", col, "cm", alpha=a, glow=0.85)
+    cv.text(cx, VY + 214, detail, 18, "medium", TEXT, "cm", alpha=a, glow=0.9)
+    tag, tag_col = ("● Recorded", RED) if r.get("recorded") else ("Not recorded", DIM)
+    cv.text(cx, VY + 240, tag, 12, "semibold", tag_col, "cm", alpha=a, glow=0.9)
+
+
+def _attempt_rows(cv: Canvas, rows: list[dict], title: str, x, y, w) -> int:
+    cv.text(x, y, title, 11, "semibold", DIM, shadow=True)
+    y += 24
+    for r in rows:
+        task = int(r["task"])
+        verdict, col = _verdict(r)
+        cv.text(x, y, f"Task {task} · {TASK_SHORT[task]}", 15, "semibold", TEXT, shadow=True)
+        cv.text(x + w, y, verdict, 15, "semibold", col, "rt", shadow=True)
+        y += 22
+        cv.text(x, y, r.get("headline", ""), 13, "regular", DIM, shadow=True)
+        y += 26
+    return y
+
+
+def _summary_moment(cv: Canvas, summary: dict, a: float) -> None:
+    """After the X: the saved attempts in large type over the dimmed picture (no box)."""
+    if a <= 0:
+        return
+    rows = summary.get("rows", [])
+    cv.dim(VX, VY, VW, VH, 1.0 - 0.7 * a)
+    cx = VX + VW / 2
+    n = len(rows)
+    total = 92 + max(n, 1) * 64 + 40
+    y = VY + (VH - total) / 2
+    if not rows:
+        cv.text(cx, y + 20, "No task found in this recording", 30, "semibold", TEXT, "cm", alpha=a)
+        cv.text(
+            cx,
+            y + 62,
+            "Nothing was saved. Show an open hand to try again.",
+            16,
+            "regular",
+            DIM,
+            "cm",
+            alpha=a,
+        )
+        return
+    cv.text(cx, y + 20, "Recording saved", 34, "semibold", TEXT, "cm", alpha=a, glow=0.7)
+    cv.text(
+        cx,
+        y + 56,
+        f"{n} {'try' if n == 1 else 'tries'} · one per task",
+        15,
+        "medium",
+        DIM,
+        "cm",
+        alpha=a,
+        shadow=True,
+    )
+    y += 104
+    for r in rows:
+        task = int(r["task"])
+        word, small, col = _score_words(r)
+        title = f"Task {task} · {b.TASKS[task]}"
+        cv.text(cx - 22, y, title, 20, "semibold", TEXT, "rm", alpha=a, glow=0.7)
+        cv.text(cx - 22, y + 24, r.get("headline", ""), 14, "regular", DIM, "rm", alpha=a, glow=0.7)
+        cv.text(cx + 22, y, word, 24, "bold", col, "lm", alpha=a, glow=0.7)
+        cv.text(cx + 22, y + 24, small, 14, "regular", DIM, "lm", alpha=a, glow=0.7)
+        y += 64
+    cv.text(cx, y + 10, "Reference only, not a diagnosis.", 12, "regular", FAINT, "cm", alpha=a)
+
+
+def _gesture_hud(cv: Canvas, runner, view: str) -> None:
+    """show_score in gesture mode: live badge, attempt card, attempt list, summary."""
+    c = runner.ctrl
+    frames = runner.splitter.current() if getattr(runner, "splitter", None) else None
+    if frames:
+        _detect_hud(cv, getattr(runner, "detect", None), c.preset_task, c.preset_leg)
+    elif c.preset_task is not None:
+        _detect_hud(cv, None, c.preset_task, c.preset_leg)
+
+    live = getattr(runner, "live", None)
+    if view != "neutral" and frames and live and "score" in live:
+        _draw_floating_score_badge(cv, runner, live)
+
+    summary = runner.summary_card()
+    if summary is not None:
+        _summary_moment(cv, summary, _fade(runner, summary))
+        return
+    card = runner.card()
+    if card is not None:
+        _attempt_moment(cv, card, _fade(runner, card))
+
+    if c.state == "recording":
+        rows, title = list(runner.rec_bouts), "THIS RECORDING"
+    else:
+        rows, title = list(runner.preview_bouts), "DETECTED · NOT RECORDED"
+    if not rows:
+        return
+    w = CARD_W
+    x = VX + VW - PAD - w
+    cv.fade_x(x - 140, 48, w + PAD + 140, H - 96, BG, 0.0, 0.86, v_feather=64)
+    y = _attempt_rows(cv, rows, title, x, VY + 92, w)
+    cv.text(x, y + 2, "Reference only, not a diagnosis.", 11, "regular", FAINT, shadow=True)
 
 
 def render(runner, view: str = "stick", show_score: bool = False) -> Canvas:
-    """The window picture for the Runner's current state.
+    """The fullscreen window picture for the Runner's current state.
 
     view: stick (stick figure on a dark backdrop), camera (mirrored camera picture with the
     stick figure on top), neutral (no person shown).
@@ -1323,25 +1675,32 @@ def render(runner, view: str = "stick", show_score: bool = False) -> Canvas:
     cv = Canvas()
     _video(cv, runner, view)
     if c.state in ("setup", "confirm"):
-        cv.dim(VX, VY, VW, VH, 0.4)
-    cv.round_corners(VX, VY, VW, VH, RADIUS)
+        cv.dim(VX, VY, VW, VH, 0.38)
     _top_bar(cv, runner)
-    strong = c.state in ("readiness", "ready", "recording", "confirm")
-    cv.ring(VX, VY, VW, VH, RADIUS, 3 if strong else 1, STATE_COLOURS[c.state] if strong else LINE)
+    cv.fade(VX, VY + VH - 84, VW, 84, BG, 0.0, 0.88)
+    paused = c.state == "idle" and bool(getattr(c, "paused", False))
+    if c.state in ("readiness", "ready", "countdown", "recording", "confirm"):
+        cv.ring(VX, VY, VW, VH, 0, 3, STATE_COLOURS[c.state])
+    elif paused:
+        cv.ring(VX, VY, VW, VH, 0, 2, AMBER, alpha=0.75)
     if c.state == "setup":
         _setup_card(cv, c)
     elif c.state == "readiness":
-        _readiness_card(cv, runner)
+        _readiness_overlay(cv, runner)
     elif c.state == "confirm":
         _confirm_card(cv, c)
+    if getattr(runner, "gesture_flow", False):
+        _gesture_ring(cv, runner)
     if show_score:
-        _score_cards(cv, runner, view)
-    if c.state not in ("setup", "confirm") and not (
+        _score_hud(cv, runner, view)
+    if c.state == "countdown":
+        _countdown_overlay(cv, runner)
+    if c.state not in ("setup", "confirm", "countdown") and not (
         c.state == "recording" and c.message == "Recording. Space stops."
     ):
         _toast(cv, c.message)
     btns = buttons(runner)
-    _draw_bottom_bar_chrome(cv, btns)
+    _draw_primary_divider(cv, btns)
     pointer = getattr(runner, "pointer", None)
     over = hit(btns, *pointer) if pointer else None
     for btn in btns:
@@ -1349,20 +1708,39 @@ def render(runner, view: str = "stick", show_score: bool = False) -> Canvas:
     return cv
 
 
-# ---------------------------------------------------------------------- the window loop
+def run_window(
+    runner,
+    stream,
+    draw,
+    paced: bool = False,
+    title: str = WINDOW_TITLE,
+    fullscreen: bool = True,
+):
+    """Open the fullscreen window and run until Q (or the window is closed). Returns runner.saved.
 
-
-def run_window(runner, stream, draw, paced: bool = False, title: str = WINDOW_TITLE):
-    """Open the window and run until Q (or the window is closed). Returns runner.saved.
+    The pictures are drawn at the main screen's size (screen_size, canvas_size), so the fullscreen
+    window fits the Mac (or Windows) screen exactly.
 
     draw(runner) -> picture. Pose detection runs in a PoseWorker thread; this loop feeds every
-    new frame to the Runner (in order), draws once, then handles the keys and mouse clicks.
+    new frame to the Runner (in order), draws once, then handles keys and clicks. Pressing F
+    (outside setup) toggles fullscreen vs normal window.
     """
     import cv2
 
     from app.ui import PoseWorker, key_name
 
+    old_size = (W, H)
+    if fullscreen and (size := screen_size()) is not None:
+        set_size(*canvas_size(size))  # draw at the screen's own shape: no bars, no stretching
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+    set_prop = getattr(cv2, "setWindowProperty", None)
+    prop_fs = getattr(cv2, "WND_PROP_FULLSCREEN", None)
+    win_fs = getattr(cv2, "WINDOW_FULLSCREEN", None)
+    win_norm = getattr(cv2, "WINDOW_NORMAL", 0)
+    is_fs = bool(fullscreen)
+    if set_prop is not None and prop_fs is not None and win_fs is not None:
+        set_prop(title, prop_fs, win_fs if is_fs else win_norm)
+
     clicks: list[str] = []
     set_mouse = getattr(cv2, "setMouseCallback", None)
     if set_mouse is not None:
@@ -1370,9 +1748,9 @@ def run_window(runner, stream, draw, paced: bool = False, title: str = WINDOW_TI
     worker = PoseWorker(stream, paced=paced)
     try:
         while not runner.quit:
-            for item in worker.take(wait_s=0.005):  # short wait: no busy loop when idle
+            for item in worker.take(wait_s=0.005):
                 runner.feed(item)
-            if worker.error is not None:  # e.g. no camera frame for 5 s (PoseStream closes)
+            if worker.error is not None:
                 runner.ctrl.message = (
                     f"Camera stopped ({worker.error}). Earlier tries are saved. Backspace if a "
                     "try is open, then Q; check the camera and restart with the same child code."
@@ -1380,18 +1758,30 @@ def run_window(runner, stream, draw, paced: bool = False, title: str = WINDOW_TI
             elif worker.ended and worker.items.empty():
                 runner.ctrl.message = "The video ended. Press Q to quit."
             cv2.imshow(title, draw(runner))
-            runner.press(key_name(cv2.waitKeyEx(1)))
+            k = key_name(cv2.waitKeyEx(1))
+            if (
+                k == "F"
+                and runner.ctrl.state != "setup"
+                and set_prop is not None
+                and prop_fs is not None
+                and win_fs is not None
+            ):
+                is_fs = not is_fs
+                set_prop(title, prop_fs, win_fs if is_fs else win_norm)
+            else:
+                runner.press(k)
             while clicks and not runner.quit:
                 runner.press(clicks.pop(0))
             if cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
         stopped = worker.stop()
-        runner.close()  # an unconfirmed video clip is discarded
-        stream.close()  # also wakes a camera read that is still waiting
+        runner.close()
+        stream.close()
         if not stopped:
             worker.stop(timeout=2.0)
         cv2.destroyAllWindows()
+        set_size(*old_size)
     return runner.saved
 
 
@@ -1402,7 +1792,7 @@ def _mouse_handler(runner, clicks: list, cv2):
     pressed: dict = {"key": None}
 
     def on_mouse(event, x, y, _flags, _param):
-        runner.pointer = (x, y)  # render() lights up the button under the pointer
+        runner.pointer = (x, y)
         if event == down:
             pressed["key"] = hit(buttons(runner), x, y) or _setup_field_hit(runner.ctrl, x, y)
         elif event == up:

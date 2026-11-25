@@ -85,6 +85,13 @@ window (`0 Bad / 1 Good / 2 Perfect`):
 - Windows + NVIDIA: `python -m app.ui --camera 0 --device cuda --show-score` (or `python -m app.demo`)
 (and allow overriding flags if someone asks to change mode/camera/view).
 Double-click instead: `Open GUI.command` (Mac) or `Open GUI.bat` (Windows + NVIDIA) in the repo root.
+The `--show-score` window runs the **gesture flow** by default (`--mode gesture`; Daryn, 2026-11-25):
+the tracked person holds an open palm to the camera -> big 3-2-1 -> recording; one recording can hold
+several tasks in a row, `live/bouts.py` cuts it into attempts and a card shows each one (task, score,
+time); crossed arms (X) stop and every attempt is saved as its own try. Without the palm the attempts
+are still shown but not saved. Open fingers come from the rtmlib Hand model (`live/gesture.py`,
+fetch once with `python -m live.gesture --download`); without it a raised hand is enough. The old
+stand-still auto start is `--mode auto`.
 Both windows (testing mode and `--show-score`) are drawn by `app/screen.py`: same look, every key is
 also a clickable button. Testing mode never draws a score (`tests/test_app_screen.py`).
 

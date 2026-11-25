@@ -75,17 +75,58 @@ def test_task_buttons_hidden_in_demo_auto_mode_but_keys_still_work(tmp_path, gue
     assert r.ctrl.preset_task == 3
     r.press("BACKSPACE", clock())
 
-    # The confirm card (unsure guess) shows the task/leg buttons again.
+    r.press("0", clock())
+    assert r.ctrl.preset_task is None and r.ctrl.preset_leg is None
     guess["value"] = (2, "R", 0.5)
-    r.press("2", clock())
-    r.press("R", clock())
     run_try(r)
     assert r.ctrl.state == "confirm" and TASK_KEYS <= keys(r)
 
-    # Testing mode and demo manual mode keep the buttons.
     for other in (Runner(tmp_path / "a", mode="auto"), DemoRunner(tmp_path / "b", mode="manual")):
         to_idle(other, clock)
         assert TASK_KEYS <= keys(other)
+
+
+def test_pinned_task_and_leg_prioritized_even_under_auto_accept(tmp_path, guess):
+    clock = Clock()
+    r = DemoRunner(tmp_path, mode="auto")
+    to_idle(r, clock)
+    r.press("1", clock())
+    r.press("L", clock())
+    guess["value"] = (2, "R", 0.45)
+    run_try(r, task=1)
+    assert r.ctrl.state == "idle" and len(r.saved) == 1
+    d = saved_json(r)
+    assert d["meta"]["task"] == 1 and d["meta"]["leg"] == "L"
+    assert d["guessed_task"] == 2 and d["corrected"] is True
+    assert r.result.get("pinned") is True and "auto" not in r.result
+    shown = " ".join(screen.render(r, "camera", show_score=True).texts)
+    assert "Task prioritized by key" in shown and "Task detected:" not in shown
+
+    r.press("0", clock())
+    assert r.ctrl.preset_task is None and r.ctrl.preset_leg is None
+    run_try(r, task=2)
+    assert r.ctrl.state == "confirm"
+
+
+def test_pause_key_blocks_auto_start_until_resumed(tmp_path, guess):
+    clock = Clock()
+    r = DemoRunner(tmp_path, mode="auto")
+    to_idle(r, clock)
+    r.press("P", clock())
+    assert r.ctrl.paused is True
+    assert "Auto paused" in screen.render(r, "camera", show_score=True).texts
+    stream = FakePoseStream(task=1, leg="L", seed=0)
+    while (item := stream.read()) is not None:
+        r.feed(item)
+        assert r.ctrl.state == "idle"
+    assert not r.saved
+    r.press("SPACE", clock())
+    assert r.ctrl.state == "recording"
+    r.press("BACKSPACE", clock())
+    r.press("P", clock())
+    assert r.ctrl.paused is False
+    run_try(r)
+    assert len(r.saved) == 1
 
 
 def test_sure_guess_is_saved_without_the_confirm_card(tmp_path, guess):

@@ -163,7 +163,14 @@ def test_live_dispatch_testing_and_show_score(tmp_path, monkeypatch):
         "view": "camera",
         "frame_size": (640, 480),
         "source": str(clip),
+        "device": "cpu",  # for the hand model of the gesture flow (2026-11-25)
     }
+
+    # --show-score without --mode runs the gesture flow; gesture without --show-score is refused.
+    app_main.main(["--video", str(clip), "--show-score", "--out", str(tmp_path)])
+    assert calls[-1][0] == "demo" and calls[-1][3]["mode"] == "gesture"
+    with pytest.raises(SystemExit):
+        app_main.main(["--mode", "gesture", "--out", str(tmp_path)])
 
     # Stream is still closed even if the UI raises.
     def boom(*_args, **_kwargs):
@@ -172,7 +179,7 @@ def test_live_dispatch_testing_and_show_score(tmp_path, monkeypatch):
     monkeypatch.setattr(app_ui, "run_gui", boom)
     with pytest.raises(RuntimeError, match="window failed"):
         app_main.main(["--out", str(tmp_path)])
-    assert len(created) == 4
+    assert len(created) == 5
     assert created[-1].closed is True
 
 

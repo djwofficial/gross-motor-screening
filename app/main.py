@@ -6,6 +6,7 @@ Owner: Daryn. Run from the repo root:
     python -m app.main --fake --task 1 --mode manual
     python -m app.main                             # live webcam GUI (testing mode: no score shown)
     python -m app.main --show-score                # live webcam GUI with 0/1/2 score overlay
+                                                   # (gesture flow: open palm starts, X stops)
 
 In --fake mode there is no operator, so the "confirmation" uses the task and leg the fake try
 was made with; if the guess differs, the row is marked corrected (as if the operator pressed
@@ -198,8 +199,17 @@ def run_live(args) -> list[Path]:
     stream = PoseStream(source=source, mode=pose_mode, device=device)
     try:
         frame_size = _frame_size(stream)
-        runner = run_demo if args.show_score else run_gui
-        return runner(
+        if args.show_score:
+            return run_demo(
+                stream,
+                args.out,
+                mode=args.mode,
+                view=view,
+                frame_size=frame_size,
+                source=source_name,
+                device=device,
+            )
+        return run_gui(
             stream,
             args.out,
             mode=args.mode,
@@ -223,7 +233,12 @@ def main(argv=None) -> int:
         help="webcam index for live mode (auto-picked on Mac if omitted)",
     )
     ap.add_argument("--video", type=Path, default=None, help="video file instead of a live webcam")
-    ap.add_argument("--mode", choices=["auto", "manual"], default="auto")
+    ap.add_argument(
+        "--mode",
+        choices=["auto", "manual", "gesture"],
+        default=None,
+        help="default: gesture with --show-score (open palm starts, crossed arms stop), else auto",
+    )
     ap.add_argument("--view", choices=["stick", "camera", "neutral"], default=None)
     ap.add_argument("--device", default=None, help="pose device: cpu or cuda (default by OS)")
     ap.add_argument(
@@ -244,6 +259,9 @@ def main(argv=None) -> int:
     ap.add_argument("--age", type=int, default=48, help="age in months (--fake mode)")
     ap.add_argument("--out", type=Path, default=Path("runs") / date.today().isoformat())
     args = ap.parse_args(argv)
+    args.mode = args.mode or ("gesture" if args.show_score and not args.fake else "auto")
+    if args.mode == "gesture" and (args.fake or not args.show_score):
+        ap.error("--mode gesture is the live --show-score window (not --fake, not testing mode)")
 
     saved = run_fake(args) if args.fake else run_live(args)
     for p in saved:
