@@ -483,6 +483,12 @@ def buttons(runner) -> list[Button]:
             Button("Q", "Quit", "Q", "danger"),
             Button("ENTER", "Start", "Enter", "primary", GREEN),
         ]
+    elif getattr(runner, "auto_flow", False) and st != "confirm":
+        # Demo + auto mode (app.demo.DemoRunner): the task and leg are detected, so no task/leg
+        # buttons. The keys 1/2/3 and L/R still work as a hidden backup. The confirm step
+        # (an unsure guess) shows them again below.
+        left.append(Button(None, "TASK · DETECTED AUTOMATICALLY", kind="label"))
+        right += _idle_or_recording_buttons(c, st)
     else:
         task = c.choice_task if st == "confirm" else c.preset_task
         leg = c.choice_leg if st == "confirm" else c.preset_leg
@@ -498,39 +504,47 @@ def buttons(runner) -> list[Button]:
             left.append(Button(None, "LEG" if leg else "LEG · AUTO", kind="label"))
             for k, name in (("L", "Left"), ("R", "Right")):
                 left.append(Button(k, name, k, "seg", selected=leg == k, group="leg"))
-        if st in ("idle", "ready"):
-            if c.consent == 3:
-                on = bool(c.video)
-                right.append(
-                    Button(
-                        "V",
-                        "Video on" if on else "Video off",
-                        "V",
-                        selected=on,
-                        colour=RED,
-                        dot=RED if on else FAINT,
-                    )
-                )
-            right += [
-                Button("N", "Next child", "N"),
-                Button("Q", "Quit", "Q", "danger"),
-                Button("SPACE", "Start", "Space", "primary", GREEN),
-            ]
-        elif st == "recording":
-            right += [
-                Button("BACKSPACE", "Cancel", "Backspace", "danger"),
-                Button("SPACE", "Stop", "Space", "primary", RED),
-            ]
-        elif st == "confirm":
+        if st == "confirm":
             right += [
                 Button("BACKSPACE", "Cancel", "Backspace", "danger"),
                 Button("ENTER", "Save", "Enter", "primary"),
             ]
+        else:
+            right += _idle_or_recording_buttons(c, st)
     # Wider system fonts (DejaVu Sans on Linux) need tighter buttons to fit the same bar.
     for pad in (16, 14, 12, 10, 8):
         if _place(left, right, pad):
             break
     return [btn for btn in left + right if btn.kind != "gap"]
+
+
+def _idle_or_recording_buttons(c, st: str) -> list[Button]:
+    """Right group of the bar while waiting (idle/ready) or recording."""
+    right: list[Button] = []
+    if st in ("idle", "ready"):
+        if c.consent == 3:
+            on = bool(c.video)
+            right.append(
+                Button(
+                    "V",
+                    "Video on" if on else "Video off",
+                    "V",
+                    selected=on,
+                    colour=RED,
+                    dot=RED if on else FAINT,
+                )
+            )
+        right += [
+            Button("N", "Next child", "N"),
+            Button("Q", "Quit", "Q", "danger"),
+            Button("SPACE", "Start", "Space", "primary", GREEN),
+        ]
+    elif st == "recording":
+        right += [
+            Button("BACKSPACE", "Cancel", "Backspace", "danger"),
+            Button("SPACE", "Stop", "Space", "primary", RED),
+        ]
+    return right
 
 
 def hit(btns: list[Button], x, y) -> str | None:
@@ -1143,6 +1157,8 @@ def _score_cards(cv: Canvas, runner, view: str = "camera") -> None:
     if c.state in ("setup", "readiness"):
         return
     x, y, w = VX + VW - 24 - CARD_W, VY + 96, CARD_W
+    if c.state == "recording" and getattr(runner, "auto_flow", False):
+        _detect_chip(cv, getattr(runner, "detect", None), c.preset_task)
     live = getattr(runner, "live", None)
     anchored = False
     if c.state != "confirm" and view != "neutral" and live and "score" in live:
@@ -1152,6 +1168,22 @@ def _score_cards(cv: Canvas, runner, view: str = "camera") -> None:
     result = getattr(runner, "result", None)
     if result and c.state in ("idle", "ready"):
         _result_card(cv, result, x, y, w)
+
+
+def _detect_label(detect: dict | None, preset_task: int | None) -> str:
+    """'Detecting: hop on one leg · 92%' while a try runs (demo + auto mode only)."""
+    if preset_task:
+        return f"Task set by key: {b.TASKS[preset_task]}"
+    if not detect:
+        return "Detecting…"
+    return f"Detecting: {b.TASKS[int(detect['task'])]} · {float(detect['confidence']):.0%}"
+
+
+def _detect_chip(cv: Canvas, detect: dict | None, preset_task: int | None) -> None:
+    """The detected task on the left, under the title (show_score + auto mode only)."""
+    label = _detect_label(detect, preset_task)
+    w = 14 + 14 + measure(label, 13, "medium") + 14
+    _chip(cv, VX + 24 + w, VY + 104, label, TEXT, dot=AMBER if preset_task else ACCENT)
 
 
 def _live_card(cv: Canvas, live, x, y, w) -> int:
@@ -1234,13 +1266,23 @@ def _result_card(cv: Canvas, r: dict, x, y, w) -> None:
         s = int(r["score"])
         words = wrap(SCORE_WORDS[s].capitalize() + ".", 15, "regular", inner, 2)
         col, chip = SCORE_COLOURS[s], f"{s} · {SCORE_NAMES[s]}"
+    auto = r.get("auto")  # saved without the confirm card (app.demo, conf >= AUTO_ACCEPT)
+    detected = (
+        f"Task detected: {b.TASKS[int(auto['task'])]} · {float(auto['confidence']):.0%}"
+        if auto
+        else ""
+    )
     h = 20 + 18 + 12 + 22 + 12 + 30 + 12 + len(words) * 21 + 6 + len(reasons) * 18 + 10 + 18 + 18
+    h += 22 if auto else 0
     _card(cv, x, y, w, h)
     cx, yy = x + 20, y + 20
     cv.text(cx, yy, "LAST SAVED TRY", 12, "semibold", DIM)
     if r.get("try"):
         cv.text(x + w - 20, yy, f"Try #{int(r['try'])}", 12, "semibold", DIM, "rt")
     yy += 30
+    if auto:
+        cv.text(cx, yy, detected, 13, "medium", _bgr("#79c0ff"))
+        yy += 22
     cv.text(cx, yy, head, 15, "medium", TEXT)
     yy += 34
     cw = measure(chip, 14, "semibold") + 28

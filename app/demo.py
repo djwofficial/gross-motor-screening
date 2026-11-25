@@ -10,11 +10,17 @@ is also a button in the bottom bar.
     python -m app.demo --fake                               # fake tries, no webcam or GPU
     python -m app.demo --video clip.mp4 --device cpu
 
-Flow: setup (child, age, consent) -> readiness Enter -> press 1/2/3 (task) and L/R (leg)
--> Space starts -> points + live score -> Space stops -> Enter saves -> summary on screen.
+Flow, manual mode: setup (child, age, consent) -> readiness Enter -> press 1/2/3 (task) and L/R
+(leg) -> Space starts -> points + live score -> Space stops -> Enter saves -> summary on screen.
+
+Flow, auto mode (the default): setup -> readiness Enter -> the child starts and ends the try
+(Segmenter) -> "Detecting: <task> · NN%" and the live score while it runs -> when it ends, a
+task guess with confidence >= AUTO_ACCEPT is saved at once (no Enter), otherwise the confirm card
+asks as in manual mode. There are no task/leg buttons; the keys 1/2/3 and L/R still work as a
+hidden backup and then win over the guess.
 
 The live score is the same model applied to the frames so far, so it changes as the try goes on.
-The official score is the one written at Enter. Screening aid only, never a diagnosis.
+The official score is the one written at save. Screening aid only, never a diagnosis.
 """
 
 from __future__ import annotations
@@ -33,15 +39,22 @@ from app.ui import Runner
 LIVE_EVERY_S = 0.5  # re-score the try so far this often
 LIVE_MIN_S = 1.0  # need at least this much of the try before a live score
 PREVIEW_WINDOW_S = 3.5
+AUTO_ACCEPT = 0.8  # group B out-of-fold: conf >= 0.8 covers 71% of tries at 95.6% accuracy (Marty, 2026-11-25)
 
 
 class DemoRunner(Runner):
-    """Runner plus a live score during recording and the result of the last saved try."""
+    """Runner plus a live score during recording and the result of the last saved try.
+
+    In auto mode (auto_flow) it also shows the task detected so far and saves a sure try without
+    the confirm card.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.auto_flow = self.ctrl.mode == "auto"  # app.screen hides the task/leg buttons
         self.preview: deque = deque()
         self.live: dict | None = None
+        self.detect: dict | None = None  # {"task", "leg", "confidence"} of the try so far
         self.result: dict | None = None
         self._last_live = -1e9
 
@@ -80,10 +93,16 @@ class DemoRunner(Runner):
         t = np.array([f[0] for f in frames_src], dtype=np.float64)
         pts = np.stack([f[1] for f in frames_src]).astype(np.float32)
         tr = Try(points=pts, t=t - t[0], meta={})
+        detecting = recording and self.auto_flow
         try:
-            task = c.preset_task or c.choice_task
-            if task is None:
-                task, _leg, _tconf = predict_task(tr.points, tr.t)
+            # Auto mode, during a try: guess the task of the try so far (same 0.5 s rhythm) and
+            # score that task, unless a hidden key 1/2/3 set it.
+            task = c.preset_task or (None if detecting else c.choice_task)
+            if task is None or detecting:
+                g_task, g_leg, g_conf = predict_task(tr.points, tr.t)
+                if detecting:
+                    self.detect = {"task": g_task, "leg": g_leg, "confidence": float(g_conf)}
+                task = task or g_task
             clues, score, conf, reasons = score_try(tr, task)
             if not recording and task == 3 and clues.get("air_s", 0.0) <= 0.0:
                 self.live = {
@@ -107,6 +126,24 @@ class DemoRunner(Runner):
     def _do_start(self, how):
         super()._do_start(how)
         self.live, self.result, self._last_live = None, None, -1e9
+        self.detect = None
+
+    def _do_stop(self):
+        """Auto mode: a sure guess is saved at once; an unsure one waits on the confirm card."""
+        super()._do_stop()  # guesses the task of the whole try -> confirm state
+        c = self.ctrl
+        if not self.auto_flow or c.state != "confirm" or c.guess is None:
+            return
+        gt, gl, gc = c.guess
+        if gc < AUTO_ACCEPT:
+            return
+        # Same as Enter on the confirm card: the choice is the hidden-key preset or the guess.
+        task, leg = c.choice_task, c.choice_leg
+        corrected = task != gt or (task != 3 and leg != gl)
+        c.state, c.guess = "idle", None
+        self._do_save(task, leg, corrected)
+        if self.result is not None:
+            self.result["auto"] = {"task": gt, "confidence": float(gc)}
 
     def _do_save(self, task, leg, corrected):
         n_before = len(self.saved)
